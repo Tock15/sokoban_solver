@@ -1,0 +1,25 @@
+[project]
+name = "sokoban-solver"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "Koses Suvarnasuddhi", email = "koses.su@gmail.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "pygame-ce>=2.5.8",
+    "pyswip>=0.3.3",
+]
+
+[project.scripts]
+sokoban-solver = "sokoban_solver:main"
+
+[build-system]
+requires = ["uv_build>=0.12.20,<0.13.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.2.0",
+]
