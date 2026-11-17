@@ -8,7 +8,7 @@ SWI-Prolog engine (all search/reasoning) + Pygame GUI via PySwip. See `sokoban-p
 
 ## Run
 - GUI: `uv run sokoban-solver` (Left/Right = level, Space = solve, R = reset)
-- Tests: `uv run pytest` and `swipl -g run_tests -t halt tests/test_state.pl`
+- Tests: `uv run pytest` and `swipl -g run_tests -t halt tests/test_state.pl tests/test_engine.pl`
 
 ## Layout
 - `prolog/` engine: `solver.pl` exposes `solve(LevelFile, Algo, Heur, Prune, Plan, Stats)`
