@@ -15,6 +15,7 @@
 :- use_module(search).
 :- use_module(deadlock).
 
+:- dynamic limit/2.   % experiments.py sets its own limits (bridge.set_limits); the GUI keeps these
 limit(nodes, 1000000).
 limit(seconds, 60).
 
