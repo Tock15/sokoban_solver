@@ -64,6 +64,13 @@ test(corner_and_dead_square_detected) :-
     assertion(dead(state(_, [4-1]))),     % corner next to the goal
     assertion(\+ dead(state(_, [3-2]))).
 
+test(dead_boxes_returns_only_stuck_boxes) :-
+    % 02_two_boxes: goals on row 3; top row is dead, start boxes and goal cells are live
+    dead_boxes('levels/02_two_boxes.txt', [[1,1], [2,2], [3,3], [5,1]], Dead),
+    assertion(Dead == [[1,1], [5,1]]),
+    dead_boxes('levels/02_two_boxes.txt', [[2,2], [4,2]], None),
+    assertion(None == []).
+
 :- end_tests(engine).
 
 apply_push(P, S, S1) :-
