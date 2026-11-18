@@ -20,3 +20,10 @@ def solve(level_file, algo="astar", heur="h_sum", prune=True):
     r = res[0]
     stats = {"nodes": r["N"], "time_ms": r["T"], "cost": r["C"], "max_frontier": r["F"]}
     return [str(m) for m in r["Plan"]], stats
+
+
+def dead_boxes(level_file, boxes):
+    """Boxes (set of (x, y)) that can never reach a goal, for the deadlock warning in Player vs AI mode.
+    Returns None while the check isn't wired up; the GUI then shows 'not connected yet'.
+    TODO: replace with the Prolog deadlock query and return the set of dead boxes."""
+    return None

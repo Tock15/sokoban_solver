@@ -7,7 +7,11 @@ SWI-Prolog engine (all search/reasoning) + Pygame GUI via PySwip. See `sokoban-p
 2. `uv sync`
 
 ## Run
-- GUI: `uv run sokoban-solver` (Left/Right = level, Space = solve, R = reset)
+- GUI: `uv run sokoban-solver`. Everything is buttons; the only keys are the arrows that move you in Player vs AI.
+  It opens on the level selector at level 1: the arrow buttons change level, then pick Watch AI or Player vs AI.
+  On the game page, pick algorithm / heuristic / pruning in the sidebar; Quit goes back to the level selector.
+  - Watch AI: Solve, Reset
+  - Player vs AI: arrow keys = move (the AI moves once per legal move of yours), Undo, Restart (both boards)
 - Tests: `uv run pytest` and `swipl -g run_tests -t halt tests/test_state.pl tests/test_engine.pl`
 
 ## Layout
