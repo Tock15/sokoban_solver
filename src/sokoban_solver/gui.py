@@ -3,16 +3,16 @@ Keys still work as shortcuts: Left/Right = level, Space = solve + play, R = rese
 import pygame
 
 from . import bridge
-from .level import LEVELS_DIR, parse, step
+from .level import LEVELS_DIR, ROOT, parse, step
 
+ASSETS = ROOT / "assets"
 TILE = 48
 SIDE = 260  # sidebar width
 BAR = 40  # message bar under the board
 PAD = 14
 ROW = 26
 BTN_H = 40
-COLOR = {"bg": (30, 30, 36), "wall": (90, 90, 100), "goal": (220, 180, 60),
-         "box": (170, 110, 60), "box_on_goal": (90, 170, 90), "agent": (80, 140, 230),
+COLOR = {"bg": (30, 30, 36), "goal": (220, 180, 60), "box_on_goal": (90, 200, 90),
          "text": (230, 230, 230), "muted": (150, 150, 162), "side": (22, 22, 27),
          "panel": (42, 42, 50), "button": (60, 60, 74), "hover": (82, 82, 100),
          "accent": (80, 140, 230), "accent_hover": (105, 160, 240)}
@@ -24,6 +24,25 @@ N_STATS = 7  # rows in the stats box, see stat_rows()
 STATS_BOX = pygame.Rect(PAD, PAD, SIDE - 2 * PAD, 2 * PAD + 52 + N_STATS * ROW)
 BTN_TOP = STATS_BOX.bottom + 2 * PAD + ROW  # leave room for the "Controls" heading
 SIDE_H = BTN_TOP + 3 * BTN_H + 2 * 10 + PAD
+
+
+def load_sprite(name, size, cut_bg=False):
+    """Load assets/<name> scaled to fit a size x size square. cut_bg makes the near-white
+    background transparent (only the part connected to the image edges, so whites inside stay)."""
+    img = pygame.image.load(ASSETS / name).convert_alpha()
+    if cut_bg:
+        w, h = img.get_size()
+        white = pygame.mask.from_threshold(img, (255, 255, 255, 255), (30, 30, 30, 255))
+        bg = pygame.mask.Mask((w, h))
+        for corner in [(0, 0), (w - 1, 0), (0, h - 1), (w - 1, h - 1)]:
+            if white.get_at(corner):
+                bg.draw(white.connected_component(corner), (0, 0))
+        for x in range(w):
+            for y in range(h):
+                if bg.get_at((x, y)):
+                    img.set_at((x, y), (0, 0, 0, 0))
+    scale = size / max(img.get_size())
+    return pygame.transform.smoothscale(img, (round(img.get_width() * scale), round(img.get_height() * scale)))
 
 
 class Button:
@@ -53,7 +72,13 @@ class App:
             Button("Solve", (PAD, BTN_TOP + BTN_H + 10, w, BTN_H), self.solve, primary=True),
             Button("Reset", (PAD, BTN_TOP + 2 * (BTN_H + 10), w, BTN_H), self.reset),
         ]
-        self.load()
+        self.load()  # opens the window, which convert_alpha() in load_sprite needs
+        self.wall = load_sprite("wall.png", TILE)
+        self.crate = load_sprite("Wooden_Crate copy.png", TILE - 6)
+        self.crate_on_goal = self.crate.copy()  # no asset for this: tint the crate green
+        self.crate_on_goal.fill((150, 230, 150), special_flags=pygame.BLEND_RGB_MULT)
+        pygame.draw.rect(self.crate_on_goal, COLOR["box_on_goal"], self.crate_on_goal.get_rect(), 3, border_radius=3)
+        self.player = load_sprite("player.png", TILE - 6, cut_bg=True)
 
     # --- actions -------------------------------------------------------------
 
@@ -177,15 +202,17 @@ class App:
 
     def draw(self):
         self.screen.fill(COLOR["bg"])
-        for (x, y) in self.walls:
-            pygame.draw.rect(self.screen, COLOR["wall"], (SIDE + x * TILE, y * TILE, TILE, TILE))
+        def blit_cell(img, cell):
+            x, y = cell
+            self.screen.blit(img, img.get_rect(center=(SIDE + x * TILE + TILE // 2, y * TILE + TILE // 2)))
+
+        for cell in self.walls:
+            blit_cell(self.wall, cell)
         for (x, y) in self.goals:
             pygame.draw.circle(self.screen, COLOR["goal"], (SIDE + x * TILE + TILE // 2, y * TILE + TILE // 2), TILE // 6)
-        for (x, y) in self.boxes:
-            c = COLOR["box_on_goal"] if (x, y) in self.goals else COLOR["box"]
-            pygame.draw.rect(self.screen, c, (SIDE + x * TILE + 4, y * TILE + 4, TILE - 8, TILE - 8))
-        ax, ay = self.agent
-        pygame.draw.circle(self.screen, COLOR["agent"], (SIDE + ax * TILE + TILE // 2, ay * TILE + TILE // 2), TILE // 3)
+        for cell in self.boxes:
+            blit_cell(self.crate_on_goal if cell in self.goals else self.crate, cell)
+        blit_cell(self.player, self.agent)
         msg = self.msg or "Keys: Left/Right level, Space solve, R reset"
         self.text(msg, self.small, "muted", (SIDE + 10, self.screen.get_height() - BAR + 12))
         self.draw_sidebar()
