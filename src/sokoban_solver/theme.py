@@ -56,6 +56,12 @@ RADIUS = {"panel": 14, "button": 10, "segment": 8, "pill": 11}
 BTN_H = 42
 SEG_H = 34
 
+# --- motion ------------------------------------------------------------------
+
+MOVE_MS = 100  # agent / crate slide per step; keep it under the replay interval (gui.REPLAY_MS)
+HOP = 3  # pixels the agent bobs up mid-step
+PULSE_MS = 450  # ring spreading out when a crate lands on a goal
+
 
 def init():
     """Load the fonts. Call once after pygame.init()."""
@@ -69,6 +75,11 @@ def init():
 def mix(a, b, t):
     """Blend color a toward b by t (0..1)."""
     return tuple(round(x + (y - x) * t) for x, y in zip(a, b))
+
+
+def ease_out(t):
+    """Fast start, gentle stop (cubic), for t in 0..1."""
+    return 1 - (1 - t) ** 3
 
 
 def text(surf, s, font, color, pos, anchor="topleft"):
@@ -140,3 +151,11 @@ def spinner(surf, center, t, r=14, color="accent"):
     start = -t / 160
     pygame.draw.arc(surf, COLOR["raised"], box, 0, 6.2832, 3)
     pygame.draw.arc(surf, COLOR[color], box, start, start + 1.9, 3)
+
+
+def ring(surf, center, t, color="box_on_goal", r0=0.3, r1=0.75):
+    """Expanding, fading ring; t goes 0..1 over the pulse. Radii are in tiles."""
+    r = round(TILE * (r0 + (r1 - r0) * ease_out(t)))
+    layer = pygame.Surface((2 * r + 4, 2 * r + 4), pygame.SRCALPHA)
+    pygame.draw.circle(layer, (*COLOR[color], round(200 * (1 - t))), layer.get_rect().center, r, 3)
+    surf.blit(layer, layer.get_rect(center=center))

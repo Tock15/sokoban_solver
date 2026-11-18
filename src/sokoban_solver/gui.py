@@ -10,7 +10,11 @@ Two modes (chosen on the level selector), Quit goes back to the level selector:
 - Player vs AI: the level twice side by side, you on the left, the AI on the right. Each legal
   arrow-key move you make, the AI plays its next planned move. Undo, Restart = restart both boards.
 
-The engine runs on a background thread (bridge.submit), so the window stays responsive while it thinks."""
+The engine runs on a background thread (bridge.submit), so the window stays responsive while it thinks.
+Moves are applied instantly; Motion only animates how the boards are drawn."""
+import math
+import os
+
 import pygame
 
 from . import bridge, theme
@@ -66,6 +70,50 @@ def segments(n, x, y, w, h, gap):
     return [pygame.Rect(round(x + i * (bw + gap)), y, round(bw), h) for i in range(n)]
 
 
+def adjacent(a, b):
+    return abs(a[0] - b[0]) + abs(a[1] - b[1]) == 1
+
+
+def lerp(a, b, t):
+    return a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t
+
+
+class Motion:
+    """Slides one board's agent, and the crate it pushed, from the old cell to the new one.
+    It watches the board as it is drawn, so the game logic stays instant: a one-cell step (a move,
+    or undoing one) glides; any bigger jump (Restart, Solve) simply appears."""
+
+    def __init__(self):
+        self.shown = None  # (agent, boxes) the current slide ends at
+        self.agent_from = self.box_from = self.box_to = self.start = None
+
+    def update(self, board, now):
+        state = (board.agent, frozenset(board.boxes))
+        if state == self.shown:
+            return
+        prev, self.shown, self.start = self.shown, state, None
+        if prev is None or not adjacent(prev[0], board.agent):
+            return
+        gone, new = prev[1] - state[1], state[1] - prev[1]
+        if len(gone) != len(new) or len(gone) > 1 or (gone and not adjacent(*gone, *new)):
+            return
+        self.agent_from, self.start = prev[0], now
+        self.box_from, self.box_to = (next(iter(gone)), next(iter(new))) if gone else (None, None)
+
+    def progress(self, now):
+        """How far the slide is, eased: 0 at the old cell, 1 at the new one (and when idle)."""
+        if self.start is None or now - self.start >= theme.MOVE_MS:
+            return 1.0
+        return theme.ease_out((now - self.start) / theme.MOVE_MS)
+
+    def landed(self, now):
+        """0..1 through the goal pulse if the pushed crate just landed on a goal cell, else None."""
+        if self.start is None or self.box_to is None:
+            return None
+        t = (now - self.start - theme.MOVE_MS) / theme.PULSE_MS
+        return t if 0 <= t < 1 else None
+
+
 class Button:
     """label may be a function (label changes with the mode). selected / enabled are optional functions.
     style: primary | secondary | ghost | segment (see theme.button)."""
@@ -86,6 +134,7 @@ class Button:
 
 
 def run():
+    os.environ["SDL_VIDEO_CENTERED"] = "1"  # center the window, again after every resize (menu <-> level)
     pygame.init()
     levels = sorted(LEVELS_DIR.glob("*.txt"))
     if not levels:
@@ -229,6 +278,7 @@ class App:
         """Put every board back at the level start. In versus mode the AI keeps its plan (Restart)."""
         self.walls, self.goals, boxes, agent = self.level_data[self.idx]
         self.you, self.ai = Board(boxes, agent), Board(boxes, agent)
+        self.motion = {id(self.you): Motion(), id(self.ai): Motion()}  # fresh boards start still
         self.history, self.finished, self.msg, self.job = [], False, "", None
         pygame.time.set_timer(STEP, 0)
         if self.mode == "versus":
@@ -432,12 +482,17 @@ class App:
             theme.button(self.screen, b.rect, b.text(), style, b.rect.collidepoint(mouse), b.is_enabled(),
                          b.font, b.radius)
 
-    def draw_board(self, surf, ox, oy, i, board, dead=(), sprite=None):
-        """Draw level i with board's boxes and agent (as sprite, default the player) onto surf at (ox, oy)."""
+    def draw_board(self, surf, ox, oy, i, board, dead=(), sprite=None, motion=None):
+        """Draw level i with board's boxes and agent (as sprite, default the player) onto surf at (ox, oy).
+        With a Motion, the last step slides into place instead of jumping."""
         walls, goals, _, _ = self.level_data[i]
+        now = pygame.time.get_ticks()
+        if motion:
+            motion.update(board, now)
+        t = motion.progress(now) if motion else 1.0
 
-        def cell_rect(cell):
-            return pygame.Rect(ox + cell[0] * TILE, oy + cell[1] * TILE, TILE, TILE)
+        def cell_rect(cell):  # cell may be fractional mid-slide
+            return pygame.Rect(round(ox + cell[0] * TILE), round(oy + cell[1] * TILE), TILE, TILE)
 
         for cell in self.floors[i]:
             pygame.draw.rect(surf, COLOR["floor" if sum(cell) % 2 else "floor_alt"], cell_rect(cell))
@@ -447,20 +502,30 @@ class App:
             c = cell_rect(cell).center
             pygame.draw.circle(surf, COLOR["goal"], c, TILE // 4, 3)
             pygame.draw.circle(surf, COLOR["goal"], c, 4)
+        sliding = t < 1
         for cell in board.boxes:
+            at = cell
+            if sliding and cell == motion.box_to:  # the crate being pushed
+                at = lerp(motion.box_from, cell, t)
+                cell = motion.box_from  # keeps its old look until it arrives
             img = self.crate_on_goal if cell in goals else self.crate
-            r = img.get_rect(center=cell_rect(cell).center)
+            r = img.get_rect(center=cell_rect(at).center)
             surf.blit(img, r)
             if cell in dead:
                 pygame.draw.rect(surf, COLOR["danger"], r.inflate(4, 4), 3, border_radius=5)
+        pulse = motion.landed(now) if motion else None
+        if pulse is not None and motion.box_to in goals and motion.box_to in board.boxes:
+            theme.ring(surf, cell_rect(motion.box_to).center, pulse)
         sprite = sprite or self.player
-        surf.blit(sprite, sprite.get_rect(center=cell_rect(board.agent).center))
+        at = lerp(motion.agent_from, board.agent, t) if sliding else board.agent
+        hop = round(theme.HOP * math.sin(math.pi * t)) if sliding else 0
+        surf.blit(sprite, sprite.get_rect(center=cell_rect(at).center).move(0, -hop))
 
     def draw_stage(self, ox, oy, board, dead=(), thinking=False, sprite=None):
         """A board with a drop shadow; while the engine thinks, veiled with a spinner."""
         rect = pygame.Rect((ox, oy), self.board_px())
         theme.shadow(self.screen, rect, 6, offset=6, spread=4)
-        self.draw_board(self.screen, ox, oy, self.idx, board, dead, sprite)
+        self.draw_board(self.screen, ox, oy, self.idx, board, dead, sprite, self.motion[id(board)])
         if thinking:
             veil = pygame.Surface(rect.size, pygame.SRCALPHA)
             veil.fill((*COLOR["bg"], 200))
