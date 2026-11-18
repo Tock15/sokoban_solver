@@ -1,6 +1,6 @@
 % Deadlock knowledge base (Ch.7). dead(S) is proved by backward chaining over
 % definite clauses. All rules are sound: they never flag a solvable state.
-:- module(deadlock, [compute_dead_squares/0, dead/1, dead_square/2]).
+:- module(deadlock, [compute_dead_squares/0, dead/1, dead_box/2, dead_square/2]).
 :- use_module(level).
 :- use_module(state, [reachable/3, delta/3]).
 :- use_module(library(ordsets)).

@@ -13,3 +13,9 @@ def test_astar_plan_solves_level(level):
     for m in plan:
         boxes, agent = step(walls, boxes, agent, m)
     assert boxes == goals
+
+
+def test_dead_boxes_flags_only_stuck_boxes():
+    level = LEVELS_DIR / "02_two_boxes.txt"
+    assert sorted(bridge.dead_boxes(level, {(1, 1), (2, 2), (5, 1)})) == [(1, 1), (5, 1)]
+    assert bridge.dead_boxes(level, {(2, 2), (4, 2)}) == []

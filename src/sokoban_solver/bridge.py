@@ -7,6 +7,7 @@ import queue
 import threading
 from concurrent.futures import Future
 
+"""PySwip bridge to the Prolog engine: solve/6 and dead_boxes/3 in prolog/solver.pl."""
 from .level import ROOT
 
 _prolog = None
@@ -64,6 +65,8 @@ def shutdown(timeout=1.0):
         submit(release).result(timeout)
     except TimeoutError:
         pass
+def _path(level_file):
+    return level_file.as_posix().replace("'", "\\'")
 
 
 def solve(level_file, algo="astar", heur="h_sum", prune=True):
@@ -79,7 +82,7 @@ def solve(level_file, algo="astar", heur="h_sum", prune=True):
 
 
 def dead_boxes(level_file, boxes):
-    """Boxes (set of (x, y)) that can never reach a goal, for the deadlock warning in Player vs AI mode.
-    Returns None while the check isn't wired up; the GUI then shows 'not connected yet'.
-    TODO: replace with the Prolog deadlock query and return the set of dead boxes."""
-    return None
+    """Return the boxes (as (x, y)) that can never reach a goal. Call after each push."""
+    q = f"dead_boxes('{_path(level_file)}', {[list(b) for b in boxes]}, D)"
+    res = list(_engine().query(q, maxresult=1))
+    return [tuple(b) for b in res[0]["D"]] if res else []
