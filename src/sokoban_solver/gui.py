@@ -1,36 +1,42 @@
-"""Pygame GUI with two pages.
-
-Everything is driven by buttons; the only keys are the arrow keys that move you in Player vs AI.
+"""Pygame GUI with two pages. Everything is driven by buttons; the only keys are the arrow keys
+that move you in Player vs AI. All colors, fonts and sizes come from theme.py.
 
 Level selector: one level at a time in the center, starting at level 1, with arrow buttons for the
-previous / next level. Then the Watch AI or Player vs AI button.
+previous / next level, then the Watch AI or Player vs AI button.
 
 Game page: sidebar on the left (stats box, settings pickers, control buttons), board(s) on the right.
 Two modes (chosen on the level selector), Quit goes back to the level selector:
 - Watch AI: Solve = solve + play, Reset.
 - Player vs AI: the level twice side by side, you on the left, the AI on the right. Each legal
-  arrow-key move you make, the AI plays its next planned move. Undo, Restart = restart both boards."""
+  arrow-key move you make, the AI plays its next planned move. Undo, Restart = restart both boards.
+
+The engine runs on a background thread (bridge.submit), so the window stays responsive while it thinks."""
 import pygame
 
-from . import bridge
-from .level import LEVELS_DIR, ROOT, parse, step
+from . import bridge, theme
+from .level import LEVELS_DIR, ROOT, Board, floor, parse
+from .theme import BTN_H, COLOR, GAP, PAD, SEG_H, TILE
 
 ASSETS = ROOT / "assets"
-TILE = 48
-SIDE = 300  # sidebar width
-BAR = {"watch": 40, "versus": 64}  # message bar under the board(s)
-LABEL_H = 40  # "You" / "AI" score line above the boards in versus mode
-GAP = 24  # space around the two boards in versus mode
-PAD = 14
-ROW = 24
-HEAD = 22  # heading above a picker row
-BTN_H = 40
-SEG_H = 32  # picker (segmented) buttons
-COLOR = {"bg": (30, 30, 36), "goal": (220, 180, 60), "box_on_goal": (90, 200, 90),
-         "text": (230, 230, 230), "muted": (150, 150, 162), "side": (22, 22, 27),
-         "panel": (42, 42, 50), "button": (60, 60, 74), "hover": (82, 82, 100),
-         "accent": (80, 140, 230), "accent_hover": (105, 160, 240), "danger": (225, 85, 85)}
-STEP = pygame.USEREVENT
+STEP = pygame.USEREVENT  # replay timer
+REPLAY_MS = {"watch": 150, "versus": 120}
+
+# Game page layout
+SIDE = 320  # sidebar width
+HEADER_H = 46  # "You" / "AI" title line above the boards
+FOOTER_H = {"watch": 56, "versus": 150}  # message / result / deadlock lines under the boards
+WATCH_MIN_W = 420
+ROW = 27
+N_STATS = 7  # rows in the stats box, see stat_rows() / versus_rows()
+STATS_TOP = 96  # title, level name, setup line and divider above the rows
+STATS_BOX = pygame.Rect(PAD, PAD, SIDE - 2 * PAD, PAD + STATS_TOP + N_STATS * ROW + 6)
+
+# Level selector layout
+MENU_W = 820
+CARD = pygame.Rect((MENU_W - 540) // 2, 140, 540, 446)  # the level shown in the center
+INSET = pygame.Rect(CARD.x + PAD, CARD.y + PAD, CARD.w - 2 * PAD, 300)  # dark area holding the preview
+ARROW = 56  # round prev / next buttons beside the card
+
 # Engine failure reasons (Stats cost) in plain words
 GAVE_UP = {"no_solution": "No solution", "node_limit": "Gave up (too many states)",
            "timeout": "Gave up (time limit)"}
@@ -38,17 +44,9 @@ ALGOS = {"astar": "A*", "greedy": "Greedy", "ucs": "UCS", "bfs": "BFS", "ids": "
 HEURS = ["h_sum", "h_match"]
 USES_HEUR = {"astar", "greedy"}  # the engine ignores the heuristic for the other algorithms
 MOVE_KEYS = {pygame.K_UP: "u", pygame.K_DOWN: "d", pygame.K_LEFT: "l", pygame.K_RIGHT: "r"}
-STATUS_COLOR = {"Solved!": "box_on_goal", "Finished": "box_on_goal", "Playing": "accent",
-                "Your move": "accent", "Solving...": "goal", "AI thinking...": "goal",
-                "AI finishing...": "goal", "Error": "danger"}
-N_STATS = 7  # rows in the stats box, see stat_rows() / versus_rows()
-STATS_TOP = 78  # title, level name and setup line above the rows
-STATS_BOX = pygame.Rect(PAD, PAD, SIDE - 2 * PAD, 2 * PAD + STATS_TOP + N_STATS * ROW)
-# Level selector layout
-MENU_W = 800
-CARD = pygame.Rect((MENU_W - 520) // 2, 116, 520, 400)  # the level shown in the center
-PREVIEW = (CARD.w - 2 * PAD - 20, 300)  # preview image fits in this box at the top of the card
-ARROW = 60  # prev / next buttons beside the card
+STATUS_COLOR = {"Solved!": "success", "Finished": "success", "Playing": "accent", "Your move": "accent",
+                "Solving...": "warning", "AI thinking...": "warning", "AI finishing...": "warning"}
+WINNER_COLOR = {"You": "success", "AI": "accent", "Tie": "warning"}
 
 
 def load_sprite(name, size):
@@ -58,12 +56,24 @@ def load_sprite(name, size):
     return pygame.transform.smoothscale(img, (round(img.get_width() * scale), round(img.get_height() * scale)))
 
 
-class Button:
-    """label may be a function (label changes with the mode). selected/enabled are optional functions."""
+def plural(n, word):
+    return f"{n} {word}{'' if n == 1 else 'es' if word.endswith(('sh', 'x')) else 's'}"
 
-    def __init__(self, label, rect, action, primary=False, selected=None, enabled=None, small=False):
-        self.label, self.rect, self.action, self.primary = label, pygame.Rect(rect), action, primary
-        self.selected, self.enabled, self.small = selected, enabled, small
+
+def segments(n, x, y, w, h, gap):
+    """n equal rects side by side filling width w."""
+    bw = (w - gap * (n - 1)) / n
+    return [pygame.Rect(round(x + i * (bw + gap)), y, round(bw), h) for i in range(n)]
+
+
+class Button:
+    """label may be a function (label changes with the mode). selected / enabled are optional functions.
+    style: primary | secondary | ghost | segment (see theme.button)."""
+
+    def __init__(self, label, rect, action, style="secondary", selected=None, enabled=None,
+                 font="body_bold", radius=theme.RADIUS["button"]):
+        self.label, self.rect, self.action, self.style = label, pygame.Rect(rect), action, style
+        self.selected, self.enabled, self.font, self.radius = selected, enabled, font, radius
 
     def text(self):
         return self.label() if callable(self.label) else self.label
@@ -75,134 +85,112 @@ class Button:
         return self.enabled is None or self.enabled()
 
 
-class Board:
-    """One copy of the level: where the boxes and the agent are, plus the score so far."""
-
-    def __init__(self, boxes, agent):
-        self.boxes, self.agent, self.moves, self.pushes = boxes, agent, 0, 0
-
-    def snapshot(self):
-        return self.boxes, self.agent, self.moves, self.pushes
-
-    def restore(self, snap):
-        self.boxes, self.agent, self.moves, self.pushes = snap
-
-    def move(self, walls, m):
-        """Apply one move with step(). Raises ValueError if illegal, and then nothing changes."""
-        boxes, self.agent = step(walls, self.boxes, self.agent, m)
-        self.pushes += boxes != self.boxes  # a push is a move that changed the boxes
-        self.boxes = boxes
-        self.moves += 1
-
-
 def run():
     pygame.init()
     levels = sorted(LEVELS_DIR.glob("*.txt"))
     if not levels:
         raise SystemExit(f"no levels in {LEVELS_DIR}")
     App(levels).loop()
-
-
-def plural(n, word):
-    return f"{n} {word}{'' if n == 1 else 'es' if word.endswith(('sh', 'x')) else 's'}"
-
-
-def segments(n, x, y, w, h, gap=6):
-    """n equal rects side by side filling width w."""
-    bw = (w - gap * (n - 1)) / n
-    return [(round(x + i * (bw + gap)), y, round(bw), h) for i in range(n)]
+    pygame.quit()
+    bridge.shutdown()
 
 
 class App:
     def __init__(self, levels):
-        self.levels, self.idx = levels, 0
+        theme.init()
+        self.levels, self.idx, self.page = levels, 0, "menu"
+        self.level_data = [parse(level.read_text()) for level in levels]  # (walls, goals, boxes, agent)
+        self.floors = [floor(walls, agent) for walls, _, _, agent in self.level_data]
         self.mode, self.algo, self.heur, self.prune = "watch", "astar", "h_match", True
-        self.plan, self.stats, self.fail, self.dead = [], None, None, None
-        self.font = pygame.font.SysFont(None, 24)
-        self.big = pygame.font.SysFont(None, 30)
-        self.title = pygame.font.SysFont(None, 48)
-        self.small = pygame.font.SysFont(None, 20)
+        self.plan, self.stats, self.fail, self.msg, self.status = [], None, None, "", "Ready"
+        self.job = self.dead_job = None  # engine calls in flight, see poll_jobs()
+        self.dead, self.hand_cursor = None, False
         self.build_sidebar()
         self.build_menu()
         self.open_menu()  # opens the window, which convert_alpha() in load_sprite needs
         self.wall = load_sprite("wall.png", TILE)
         self.crate = load_sprite("crate.png", TILE - 6)
         self.crate_on_goal = self.crate.copy()  # no asset for this: tint the crate green
-        self.crate_on_goal.fill((150, 230, 150), special_flags=pygame.BLEND_RGB_MULT)
-        pygame.draw.rect(self.crate_on_goal, COLOR["box_on_goal"], self.crate_on_goal.get_rect(), 3, border_radius=3)
+        tint = theme.mix(COLOR["box_on_goal"], (255, 255, 255), 0.45)
+        self.crate_on_goal.fill(tint, special_flags=pygame.BLEND_RGB_MULT)
+        pygame.draw.rect(self.crate_on_goal, COLOR["box_on_goal"], self.crate_on_goal.get_rect(), 3, border_radius=4)
         self.player = load_sprite("player.png", TILE - 6)
-        self.previews = [self.make_preview(level) for level in levels]
-        self.box_counts = [len(parse(level.read_text())[2]) for level in levels]
+        self.robot = load_sprite("AI-sprite.png", TILE - 6)  # the AI's boards (Watch AI and Player vs AI)
+        self.previews = [self.make_preview(i) for i in range(len(levels))]
+
+    # --- layout ----------------------------------------------------------------
 
     def build_sidebar(self):
-        """Lay out the headings and buttons under the stats box, top to bottom."""
-        w = SIDE - 2 * PAD
-        self.headings, self.buttons = [], []
-        y = STATS_BOX.bottom + PAD
+        """Lay out the section labels, pickers and buttons under the stats box, top to bottom."""
+        x, w = PAD, SIDE - 2 * PAD
+        self.labels, self.groups, self.buttons = [], [], []
+        idle = lambda: self.job is None  # settings and controls wait while the engine thinks
+        y = STATS_BOX.bottom + GAP - 4
 
-        def heading(label, x=PAD):
-            self.headings.append((label, (x, y)))
+        def segmented(options, gx, gw, current, action, enabled=idle):
+            """A row of segments on a dark track. options = [(label, value)]."""
+            track = pygame.Rect(gx, y, gw, SEG_H)
+            self.groups.append(track)
+            for (label, value), r in zip(options, segments(len(options), gx + 3, y + 3, gw - 6, SEG_H - 6, gap=2)):
+                self.buttons.append(Button(label, r, lambda v=value: action(v), style="segment", font="small_bold",
+                                           selected=lambda v=value: current() == v, enabled=enabled,
+                                           radius=theme.RADIUS["segment"] - 2))
 
-        heading("Algorithm")
-        y += HEAD
-        for (algo, label), r in zip(ALGOS.items(), segments(len(ALGOS), PAD, y, w, SEG_H, gap=4)):
-            self.buttons.append(Button(label, r, lambda a=algo: self.pick(algo=a),
-                                       selected=lambda a=algo: self.algo == a, small=True))
-        y += SEG_H + PAD
+        self.labels.append(("Algorithm", (x, y)))
+        y += 20
+        segmented([(label, algo) for algo, label in ALGOS.items()], x, w,
+                  lambda: self.algo, lambda v: self.pick(algo=v))
+        y += SEG_H + GAP - 8
 
-        hw = (w - PAD) * 3 // 5  # heuristic gets more room than pruning, its labels are longer
-        heading("Heuristic")
-        heading("Pruning", PAD + hw + PAD)
-        y += HEAD
+        hw = (w - 12) * 3 // 5  # heuristic gets more room than pruning, its labels are longer
+        self.labels += [("Heuristic", (x, y)), ("Pruning", (x + hw + 12, y))]
+        y += 20
         uses_heur = lambda: self.algo in USES_HEUR
-        for heur, r in zip(HEURS, segments(len(HEURS), PAD, y, hw, SEG_H, gap=4)):
-            self.buttons.append(Button(heur, r, lambda h=heur: self.pick(heur=h), small=True,
-                                       selected=lambda h=heur: self.heur == h and uses_heur(), enabled=uses_heur))
-        for (label, prune), r in zip([("On", True), ("Off", False)], segments(2, PAD + hw + PAD, y, w - hw - PAD, SEG_H, gap=4)):
-            self.buttons.append(Button(label, r, lambda p=prune: self.pick(prune=p), small=True,
-                                       selected=lambda p=prune: self.prune == p))
-        y += SEG_H + 2 * PAD
+        segmented([(h, h) for h in HEURS], x, hw, lambda: self.heur if uses_heur() else None,
+                  lambda v: self.pick(heur=v), enabled=lambda: idle() and uses_heur())
+        segmented([("On", True), ("Off", False)], x + hw + 12, w - hw - 12, lambda: self.prune,
+                  lambda v: self.pick(prune=v))
+        y += SEG_H + GAP
 
-        heading("Controls")
-        y += HEAD
         versus = lambda: self.mode == "versus"
         self.buttons += [
-            Button(lambda: "Undo" if versus() else "Solve", (PAD, y, w, BTN_H),
-                   lambda: self.undo() if versus() else self.solve(), primary=True),
-            Button(lambda: "Restart" if versus() else "Reset", (PAD, y + BTN_H + 10, w, BTN_H), self.reset),
-            Button("Quit to levels", (PAD, y + 2 * (BTN_H + 10), w, BTN_H), self.open_menu),
+            Button(lambda: "Undo" if versus() else "Solve", (x, y, w, BTN_H),
+                   lambda: self.undo() if versus() else self.solve(), style="primary", enabled=idle),
+            Button(lambda: "Restart" if versus() else "Reset", (x, y + BTN_H + 10, w, BTN_H), self.reset, enabled=idle),
+            Button("Quit to levels", (x, y + 2 * (BTN_H + 10), w, BTN_H), self.open_menu, style="ghost"),
         ]
         self.side_h = y + 3 * BTN_H + 2 * 10 + PAD
 
-    # --- level selector --------------------------------------------------------
-
     def build_menu(self):
-        """Prev / next arrows beside the center card, and the two mode buttons under it."""
-        arrow_y = CARD.centery - ARROW // 2
+        """Round prev / next buttons beside the center card, and the two mode buttons under it."""
+        arrow_y = INSET.centery - ARROW // 2
         self.prev_btn = Button("", (CARD.x - 28 - ARROW, arrow_y, ARROW, ARROW), lambda: self.select(-1),
-                               enabled=lambda: self.idx > 0)
+                               enabled=lambda: self.idx > 0, radius=ARROW // 2)
         self.next_btn = Button("", (CARD.right + 28, arrow_y, ARROW, ARROW), lambda: self.select(1),
-                               enabled=lambda: self.idx < len(self.levels) - 1)
-        bw, gap, by = 210, 16, CARD.bottom + 52
+                               enabled=lambda: self.idx < len(self.levels) - 1, radius=ARROW // 2)
+        bw, gap, bh, by = 220, 16, BTN_H + 6, CARD.bottom + 56
         bx = (MENU_W - 2 * bw - gap) // 2
         self.menu_buttons = [
             self.prev_btn, self.next_btn,
-            Button("Watch AI", (bx, by, bw, BTN_H + 4), lambda: self.start("watch"), primary=True),
-            Button("Player vs AI", (bx + bw + gap, by, bw, BTN_H + 4), lambda: self.start("versus"), primary=True),
+            Button("Watch AI", (bx, by, bw, bh), lambda: self.start("watch"), style="primary"),
+            Button("Player vs AI", (bx + bw + gap, by, bw, bh), lambda: self.start("versus"), style="primary"),
         ]
-        self.menu_size = (MENU_W, by + BTN_H + 4 + 36)
+        self.menu_size = (MENU_W, by + bh + 44)
 
-    def make_preview(self, level):
-        """The level's start position drawn small, to fit the top of its card."""
-        walls, goals, boxes, agent = parse(level.read_text())
+    def make_preview(self, i):
+        """Level i's start position, scaled down to fit the selector's preview area."""
+        walls, _, boxes, agent = self.level_data[i]
         surf = pygame.Surface(((max(x for x, _ in walls) + 1) * TILE, (max(y for _, y in walls) + 1) * TILE))
         surf.fill(COLOR["bg"])
-        self.draw_board(surf, 0, 0, walls, goals, Board(boxes, agent))
-        scale = min(PREVIEW[0] / surf.get_width(), PREVIEW[1] / surf.get_height(), 1)  # never blow up the pixel art
+        self.draw_board(surf, 0, 0, i, Board(boxes, agent))
+        box = INSET.inflate(-40, -40)
+        scale = min(box.w / surf.get_width(), box.h / surf.get_height(), 1)  # never blow up the pixel art
         return pygame.transform.smoothscale(surf, (round(surf.get_width() * scale), round(surf.get_height() * scale)))
 
+    # --- level selector --------------------------------------------------------
+
     def open_menu(self):
-        self.page = "menu"
+        self.page, self.job = "menu", None  # a search still running is discarded
         pygame.time.set_timer(STEP, 0)
         self.screen = pygame.display.set_mode(self.menu_size)
         pygame.display.set_caption("Sokoban — choose a level")
@@ -221,25 +209,27 @@ class App:
     def level(self):
         return self.levels[self.idx]
 
+    def board_px(self):
+        walls = self.level_data[self.idx][0]
+        return (max(x for x, _ in walls) + 1) * TILE, (max(y for _, y in walls) + 1) * TILE
+
     def load(self):
-        """(Re)size the window for the current level and mode, then start fresh."""
-        self.reset()
-        bw = (max(x for x, _ in self.walls) + 1) * TILE
-        bh = self.board_h = (max(y for _, y in self.walls) + 1) * TILE
-        if self.mode == "versus":
-            size = (SIDE + 3 * GAP + 2 * bw, max(LABEL_H + bh + BAR["versus"], self.side_h))
-        else:
-            size = (SIDE + max(bw, 420), max(bh + BAR["watch"], self.side_h))
+        """Size the window for the current level and mode, then start fresh."""
+        bw, bh = self.board_px()
+        content_w = 2 * bw + GAP if self.mode == "versus" else max(bw, WATCH_MIN_W)
+        size = (SIDE + 2 * GAP + content_w, max(GAP + HEADER_H + bh + FOOTER_H[self.mode], self.side_h))
         self.screen = pygame.display.set_mode(size)
         pygame.display.set_caption(f"Sokoban — {self.level.name}")
         if self.mode == "versus":
             self.new_game()
+        else:
+            self.reset()
 
     def reset(self):
-        """Put every board back at the level start. In versus mode the AI keeps its plan (R = restart)."""
-        self.walls, self.goals, boxes, agent = parse(self.level.read_text())
+        """Put every board back at the level start. In versus mode the AI keeps its plan (Restart)."""
+        self.walls, self.goals, boxes, agent = self.level_data[self.idx]
         self.you, self.ai = Board(boxes, agent), Board(boxes, agent)
-        self.history, self.finished, self.msg = [], False, ""
+        self.history, self.finished, self.msg, self.job = [], False, "", None
         pygame.time.set_timer(STEP, 0)
         if self.mode == "versus":
             self.check_deadlock()
@@ -263,21 +253,32 @@ class App:
         parts = [ALGOS[self.algo]] + ([self.heur] if self.algo in USES_HEUR else [])
         return " · ".join(parts + [f"pruning {'on' if self.prune else 'off'}"])
 
-    def think(self, busy):
-        """Run the engine once with the chosen settings. Returns True if it found a plan."""
+    def think(self, busy, then):
+        """Start the engine on the chosen settings in the background; then() runs when it's done."""
         self.plan, self.stats, self.fail, self.status = [], None, None, busy
-        self.draw()  # show the busy status before the (blocking) engine call
-        try:
-            plan, self.stats = bridge.solve(self.level, self.algo, self.heur, self.prune)
-        except Exception as ex:  # show engine/bridge errors instead of crashing the GUI
-            self.fail, self.msg = "Error", f"error: {ex}"
-            return False
-        cost = self.stats and self.stats["cost"]
-        if plan is None or not isinstance(cost, int):
-            self.fail = GAVE_UP.get(str(cost), "No solution")
-            return False
-        self.plan = plan
-        return True
+        self.job = (bridge.submit(bridge.solve, self.level, self.algo, self.heur, self.prune), then)
+
+    def poll_jobs(self):
+        """Pick up finished engine calls (once per frame)."""
+        if self.job and self.job[0].done():
+            future, then = self.job
+            self.job = None
+            try:
+                plan, self.stats = future.result()
+            except Exception as ex:  # show engine/bridge errors instead of crashing the GUI
+                self.fail, self.msg = "Error", f"Engine error: {ex}"
+            else:
+                cost = self.stats and self.stats["cost"]
+                if plan is None or not isinstance(cost, int):
+                    self.fail = GAVE_UP.get(str(cost), "No solution")
+                else:
+                    self.plan = plan
+            then()
+        if self.dead_job and self.dead_job[0].done():
+            future, boxes = self.dead_job
+            self.dead_job = None
+            if boxes == self.you.boxes:  # skip answers about a position you've already left
+                self.dead = None if future.exception() else future.result()
 
     def ai_step(self):
         """AI plays its next planned move (its move count is its place in the plan). False if none left."""
@@ -305,22 +306,24 @@ class App:
 
     def solve(self):
         self.reset()  # the engine solves from the level's start position
-        if self.think("Solving..."):
-            self.status = "Playing"
-            pygame.time.set_timer(STEP, 150)
-        else:
+        self.think("Solving...", self.start_replay)
+
+    def start_replay(self):
+        if self.fail:
             self.status = self.fail
+        else:
+            self.status = "Playing"
+            pygame.time.set_timer(STEP, REPLAY_MS["watch"])
 
     # --- player vs AI ------------------------------------------------------------
 
     def new_game(self):
         """Solve once with the chosen settings to get the AI's plan, then both start from the level start."""
         self.reset()
-        self.think("AI thinking...")
-        self.status = self.versus_status()
+        self.think("AI thinking...", lambda: setattr(self, "status", self.versus_status()))
 
     def player_move(self, m):
-        if self.finished or self.you.boxes == self.goals:
+        if self.job or self.finished or self.you.boxes == self.goals:
             return
         before = (self.you.snapshot(), self.ai.snapshot())
         try:
@@ -331,7 +334,7 @@ class App:
         self.ai_step()
         self.check_deadlock()
         if self.you.boxes == self.goals:
-            pygame.time.set_timer(STEP, 120)  # you're done: the AI plays out the rest of its plan
+            pygame.time.set_timer(STEP, REPLAY_MS["versus"])  # you're done: the AI plays out the rest
         self.status = self.versus_status()
 
     def undo(self):
@@ -346,8 +349,8 @@ class App:
         self.status = self.versus_status()
 
     def check_deadlock(self):
-        """Ask the engine which of the player's boxes can never reach a goal (None = check not available)."""
-        self.dead = bridge.dead_boxes(self.level, self.you.boxes)
+        """Ask the engine (in the background) which of your boxes can never reach a goal."""
+        self.dead_job = (bridge.submit(bridge.dead_boxes, self.level, self.you.boxes), self.you.boxes)
 
     def versus_status(self):
         if self.finished:
@@ -376,36 +379,110 @@ class App:
 
     # --- main loop -----------------------------------------------------------
 
+    def current_buttons(self):
+        return self.menu_buttons if self.page == "menu" else self.buttons
+
     def loop(self):
         clock = pygame.time.Clock()
         while True:
             for e in pygame.event.get():
-                menu = self.page == "menu"
                 if e.type == pygame.QUIT:
                     return
                 if e.type == pygame.KEYDOWN:  # the only keys: arrows move you in Player vs AI
-                    if not menu and self.mode == "versus" and e.key in MOVE_KEYS:
+                    if self.page == "game" and self.mode == "versus" and e.key in MOVE_KEYS:
                         self.player_move(MOVE_KEYS[e.key])
                 elif e.type == pygame.MOUSEBUTTONDOWN and e.button == 1:
                     self.click(e.pos)
-                elif e.type == STEP and not menu:
+                elif e.type == STEP and self.page == "game":
                     self.play_step()
+            self.poll_jobs()
+            self.update_cursor()
             self.draw()
             clock.tick(60)
 
     def click(self, pos):
-        for b in self.menu_buttons if self.page == "menu" else self.buttons:
+        for b in self.current_buttons():
             if b.rect.collidepoint(pos) and b.is_enabled():
                 b.action()
                 return
 
-    # --- drawing -------------------------------------------------------------
+    def update_cursor(self):
+        """Hand cursor over anything clickable."""
+        pos = pygame.mouse.get_pos()
+        hand = any(b.rect.collidepoint(pos) and b.is_enabled() for b in self.current_buttons())
+        if hand != self.hand_cursor:
+            self.hand_cursor = hand
+            try:
+                pygame.mouse.set_cursor(pygame.SYSTEM_CURSOR_HAND if hand else pygame.SYSTEM_CURSOR_ARROW)
+            except pygame.error:  # no system cursors (e.g. headless)
+                pass
+
+    # --- drawing: shared -------------------------------------------------------
+
+    def text(self, s, font, color, pos, anchor="topleft"):
+        return theme.text(self.screen, s, font, color, pos, anchor)
+
+    def level_name(self, i):
+        return self.levels[i].stem.split("_", 1)[-1].replace("_", " ").capitalize()
+
+    def draw_buttons(self, buttons):
+        mouse = pygame.mouse.get_pos()
+        for b in buttons:
+            style = "selected" if b.style == "segment" and b.is_selected() else b.style
+            theme.button(self.screen, b.rect, b.text(), style, b.rect.collidepoint(mouse), b.is_enabled(),
+                         b.font, b.radius)
+
+    def draw_board(self, surf, ox, oy, i, board, dead=(), sprite=None):
+        """Draw level i with board's boxes and agent (as sprite, default the player) onto surf at (ox, oy)."""
+        walls, goals, _, _ = self.level_data[i]
+
+        def cell_rect(cell):
+            return pygame.Rect(ox + cell[0] * TILE, oy + cell[1] * TILE, TILE, TILE)
+
+        for cell in self.floors[i]:
+            pygame.draw.rect(surf, COLOR["floor" if sum(cell) % 2 else "floor_alt"], cell_rect(cell))
+        for cell in walls:
+            surf.blit(self.wall, self.wall.get_rect(center=cell_rect(cell).center))
+        for cell in goals:
+            c = cell_rect(cell).center
+            pygame.draw.circle(surf, COLOR["goal"], c, TILE // 4, 3)
+            pygame.draw.circle(surf, COLOR["goal"], c, 4)
+        for cell in board.boxes:
+            img = self.crate_on_goal if cell in goals else self.crate
+            r = img.get_rect(center=cell_rect(cell).center)
+            surf.blit(img, r)
+            if cell in dead:
+                pygame.draw.rect(surf, COLOR["danger"], r.inflate(4, 4), 3, border_radius=5)
+        sprite = sprite or self.player
+        surf.blit(sprite, sprite.get_rect(center=cell_rect(board.agent).center))
+
+    def draw_stage(self, ox, oy, board, dead=(), thinking=False, sprite=None):
+        """A board with a drop shadow; while the engine thinks, veiled with a spinner."""
+        rect = pygame.Rect((ox, oy), self.board_px())
+        theme.shadow(self.screen, rect, 6, offset=6, spread=4)
+        self.draw_board(self.screen, ox, oy, self.idx, board, dead, sprite)
+        if thinking:
+            veil = pygame.Surface(rect.size, pygame.SRCALPHA)
+            veil.fill((*COLOR["bg"], 200))
+            self.screen.blit(veil, rect)
+            theme.spinner(self.screen, (rect.centerx, rect.centery - 14), pygame.time.get_ticks())
+            self.text("Thinking…", "body", "muted", (rect.centerx, rect.centery + 12), "midtop")
+
+    def draw_header(self, ox, who, board, right):
+        """'You' / 'AI' title with the running score; right = x of the board's right edge."""
+        r = self.text(who, "h1", "text", (ox, GAP - 4))
+        self.text(f"{plural(board.moves, 'move')} · {plural(board.pushes, 'push')}", "body", "muted",
+                  (r.right + 12, r.bottom - 3), "bottomleft")
+        if who == "AI" and self.plan and board.moves >= len(self.plan) and not self.finished:
+            theme.pill(self.screen, "Done, waiting", "muted", (right, GAP - 2))
+
+    # --- drawing: game page ----------------------------------------------------
 
     def stat_rows(self):
         """Watch mode engine stats in plain words. Cost / g(n) = box pushes; nodes = states checked."""
         s, ai = self.stats or {}, self.ai
         solved = isinstance(s.get("cost"), int)
-        dash = "-"
+        dash = "–"
         return [
             ("Boxes on goal", f"{len(ai.boxes & self.goals)} / {len(ai.boxes)}"),
             ("Moves used", f"{ai.moves} / {len(self.plan)}" if solved else str(ai.moves)),
@@ -413,7 +490,7 @@ class App:
             ("Pushes left", str(s["cost"] - ai.pushes) if solved else dash),
             ("States checked", f"{s['nodes']:,}" if s else dash),
             ("Most waiting", f"{s['max_frontier']:,}" if s else dash),
-            ("Think time", f"{s['time_ms']} ms" if s else dash),
+            ("Think time", f"{s['time_ms']:,} ms" if s else dash),
         ]
 
     def versus_rows(self):
@@ -421,147 +498,130 @@ class App:
         s, you, ai = self.stats or {}, self.you, self.ai
         on_goal = lambda b: f"{len(b.boxes & self.goals)} / {len(b.boxes)}"
         win = self.winners()
+        dash = "–"
         return [
-            ("", "You", "AI"),
+            ("", "YOU", "AI"),
             ("Moves", str(you.moves), str(ai.moves)),
             ("Pushes", str(you.pushes), str(ai.pushes)),
             ("Boxes on goal", on_goal(you), on_goal(ai)),
-            ("AI plan", f"{len(self.plan)} moves, {s['cost']} pushes" if self.plan else "-"),
-            ("Fewest moves", win[0] if win else "-"),
-            ("Fewest pushes", win[1] if win else "-"),
+            ("AI plan", f"{len(self.plan)} moves, {s['cost']} pushes" if self.plan else dash),
+            ("Fewest moves", win[0] if win else dash),
+            ("Fewest pushes", win[1] if win else dash),
         ]
 
-    def text(self, s, font, color, pos, right=False, center=False):
-        img = font.render(s, True, COLOR[color])
-        r = img.get_rect(midtop=pos) if center else img.get_rect(topright=pos) if right else img.get_rect(topleft=pos)
-        self.screen.blit(img, r)
-
     def draw_sidebar(self):
-        pygame.draw.rect(self.screen, COLOR["side"], (0, 0, SIDE, self.screen.get_height()))
+        h = self.screen.get_height()
+        pygame.draw.rect(self.screen, COLOR["surface"], (0, 0, SIDE, h))
+        pygame.draw.line(self.screen, COLOR["border"], (SIDE - 1, 0), (SIDE - 1, h))
 
         box = STATS_BOX
-        pygame.draw.rect(self.screen, COLOR["panel"], box, border_radius=8)
+        theme.panel(self.screen, box, drop=False)
         x, rx, y = box.x + PAD, box.right - PAD, box.y + PAD
-        self.text(f"Level {self.idx + 1} / {len(self.levels)}", self.big, "text", (x, y))
-        status_color = STATUS_COLOR.get(self.status, "danger" if self.status.startswith("AI: ") else "muted")
-        self.text(self.status, self.font, status_color, (rx, y + 4), right=True)
-        self.text(self.level_name(self.idx), self.small, "muted", (x, y + 28))
-        self.text(self.setup_label(), self.font, "accent", (x, y + 48))
-        y += STATS_TOP
+        r = self.text(f"Level {self.idx + 1}", "h1", "text", (x, y - 2))
+        self.text(f"of {len(self.levels)}", "body", "faint", (r.right + 8, r.bottom - 4), "bottomleft")
+        failed = self.status.startswith(("AI: ", "Error", "Gave up", "No solution"))
+        theme.pill(self.screen, self.status, STATUS_COLOR.get(self.status, "danger" if failed else "muted"), (rx, y))
+        self.text(self.level_name(self.idx), "body", "muted", (x, y + 32))
+        self.text(self.setup_label(), "small_bold", "accent", (x, y + 58))
+        pygame.draw.line(self.screen, COLOR["border"], (x, y + STATS_TOP - 14), (rx, y + STATS_TOP - 14))
+        y += STATS_TOP - 4
         versus = self.mode == "versus"
-        for i, row in enumerate(self.versus_rows() if versus else self.stat_rows()):
-            label, *values = row
-            self.text(label, self.font, "muted", (x, y))
-            color = "muted" if versus and i == 0 else "text"
+        for i, (label, *values) in enumerate(self.versus_rows() if versus else self.stat_rows()):
+            header = versus and i == 0
+            font, color, dy = ("label", "faint", 4) if header else ("body_bold", "text", 0)
+            self.text(label, "body", "muted", (x, y))
             if len(values) == 2:  # You / AI columns
-                self.text(values[0], self.font, color, (rx - 72, y), right=True)
-            self.text(values[-1], self.font, color, (rx, y), right=True)
+                self.text(values[0], font, color, (rx - 76, y + dy), "topright")
+            self.text(values[-1], font, color, (rx, y + dy), "topright")
             y += ROW
 
-        for label, pos in self.headings:
-            self.text(label, self.font, "muted", pos)
+        for label, pos in self.labels:
+            theme.label(self.screen, label, pos)
+        for track in self.groups:
+            pygame.draw.rect(self.screen, COLOR["bg"], track, border_radius=theme.RADIUS["segment"])
         self.draw_buttons(self.buttons)
 
-    def draw_buttons(self, buttons):
-        mouse = pygame.mouse.get_pos()
-        for b in buttons:
-            enabled, hover = b.is_enabled(), b.rect.collidepoint(mouse)
-            if not enabled:
-                color = "panel"
-            elif b.primary or b.is_selected():
-                color = "accent_hover" if hover else "accent"
-            else:
-                color = "hover" if hover else "button"
-            pygame.draw.rect(self.screen, COLOR[color], b.rect, border_radius=6)
-            img = (self.small if b.small else self.font).render(b.text(), True, COLOR["text" if enabled else "muted"])
-            self.screen.blit(img, img.get_rect(center=b.rect.center))
-
-    def draw_board(self, surf, ox, oy, walls, goals, board, dead=()):
-        """Draw a level with board's boxes and agent onto surf, top-left corner at (ox, oy)."""
-        def center(cell):
-            return ox + cell[0] * TILE + TILE // 2, oy + cell[1] * TILE + TILE // 2
-
-        for cell in walls:
-            surf.blit(self.wall, self.wall.get_rect(center=center(cell)))
-        for cell in goals:
-            pygame.draw.circle(surf, COLOR["goal"], center(cell), TILE // 6)
-        for cell in board.boxes:
-            img = self.crate_on_goal if cell in goals else self.crate
-            surf.blit(img, img.get_rect(center=center(cell)))
-            if cell in dead:
-                pygame.draw.rect(surf, COLOR["danger"], img.get_rect(center=center(cell)), 3, border_radius=3)
-        surf.blit(self.player, self.player.get_rect(center=center(board.agent)))
-
-    def draw_versus(self):
-        bw = (self.screen.get_width() - SIDE - 3 * GAP) // 2
-        left, right = SIDE + GAP, SIDE + 2 * GAP + bw
-        for ox, who, board in [(left, "You", self.you), (right, "AI", self.ai)]:
-            self.text(who, self.big, "text", (ox, 12))
-            score = f"{plural(board.moves, 'move')} · {plural(board.pushes, 'push')}"
-            if who == "AI" and self.plan and board.moves >= len(self.plan) and not self.finished:
-                score += " · done, waiting"
-            self.text(score, self.font, "muted", (ox + 52, 16))
-        bottom = LABEL_H + self.board_h
-        pygame.draw.line(self.screen, COLOR["panel"], (right - GAP // 2, 10), (right - GAP // 2, bottom), 2)
-        self.draw_board(self.screen, left, LABEL_H, self.walls, self.goals, self.you, self.dead or ())
-        self.draw_board(self.screen, right, LABEL_H, self.walls, self.goals, self.ai)
-
-        y = bottom + 14  # result / hint line, then the deadlock warning spot
+    def draw_footer_versus(self, left, y, width):
         win = self.winners()
-        if win:
-            result = (f"Fewest moves: {win[0]} ({self.you.moves} vs {self.ai.moves})    "
-                      f"Fewest pushes: {win[1]} ({self.you.pushes} vs {self.ai.pushes})")
-            self.text(result, self.font, "box_on_goal", (left, y))
+        if win:  # result card: who won on moves and on pushes
+            card = pygame.Rect(left, y, width, 66)
+            theme.panel(self.screen, card)
+            half = width // 2
+            for i, (title, winner, you, ai) in enumerate([("Fewest moves", win[0], self.you.moves, self.ai.moves),
+                                                          ("Fewest pushes", win[1], self.you.pushes, self.ai.pushes)]):
+                hx = left + i * half
+                theme.label(self.screen, title, (hx + PAD + 4, y + 13))
+                verdict = {"You": "You win", "AI": "AI wins", "Tie": "Tie"}[winner]
+                self.text(verdict, "h2", WINNER_COLOR[winner], (hx + PAD + 4, y + 31))
+                self.text(f"You {you}  ·  AI {ai}", "body", "muted", (hx + half - PAD - 4, y + 35), "topright")
+            pygame.draw.line(self.screen, COLOR["border"], (left + half, y + 12), (left + half, y + 54))
+            y += 66 + 14
         else:
-            self.text(self.msg or "Use the arrow keys to move", self.small, "muted", (left, y + 3))
-        # Deadlock warning spot (the Prolog query plugs in via bridge.dead_boxes)
-        if self.dead is None:
-            self.text("Deadlock check: not connected yet", self.small, "muted", (left, y + 28))
-        elif self.dead:
-            self.text(f"Deadlock! {plural(len(self.dead), 'box')} can never reach a goal — press Z to undo",
-                      self.font, "danger", (left, y + 26))
-        else:
-            self.text("Deadlock check: every box can still reach a goal", self.small, "muted", (left, y + 28))
+            self.text(self.msg or "Use the arrow keys to move", "body", "danger" if self.msg else "muted", (left, y))
+            y += 34
 
-    def level_name(self, i):
-        return self.levels[i].stem.split("_", 1)[-1].replace("_", " ")
+        # Deadlock warning spot (the Prolog query plugs in via bridge.dead_boxes)
+        if self.dead:
+            theme.pill(self.screen, f"Deadlock! {plural(len(self.dead), 'box')} can never reach a goal — click Undo",
+                       "danger", (left, y), "topleft")
+        else:
+            note = "not connected yet" if self.dead is None else "every box can still reach a goal"
+            pygame.draw.circle(self.screen, COLOR["faint" if self.dead is None else "success"], (left + 5, y + 10), 4)
+            self.text(f"Deadlock check: {note}", "small", "faint", (left + 16, y + 2))
+
+    def draw_game(self):
+        bw, bh = self.board_px()
+        top = GAP + HEADER_H
+        thinking = self.job is not None
+        if self.mode == "versus":
+            left, right = SIDE + GAP, SIDE + 2 * GAP + bw
+            self.draw_header(left, "You", self.you, left + bw)
+            self.draw_header(right, "AI", self.ai, right + bw)
+            self.draw_stage(left, top, self.you, self.dead or ())
+            self.draw_stage(right, top, self.ai, thinking=thinking, sprite=self.robot)
+            self.draw_footer_versus(left, top + bh + 24, 2 * bw + GAP)
+        else:
+            content_w = self.screen.get_width() - SIDE - 2 * GAP
+            left = SIDE + GAP + (content_w - bw) // 2
+            self.draw_header(left, "AI", self.ai, left + bw)
+            self.draw_stage(left, top, self.ai, thinking=thinking, sprite=self.robot)
+            if self.msg:
+                self.text(self.msg, "body", "danger", (left, top + bh + 24))
+        self.draw_sidebar()
+
+    # --- drawing: level selector -----------------------------------------------
 
     def draw_menu(self):
         mid = MENU_W // 2
-        self.text("Sokoban", self.title, "text", (mid, 28), center=True)
-        self.text("Choose a level, then how to play",
-                  self.small, "muted", (mid, 72), center=True)
+        self.text("Sokoban", "title", "text", (mid, 36), "midtop")
+        self.text("Choose a level, then how to play", "body", "muted", (mid, 94), "midtop")
 
-        pygame.draw.rect(self.screen, COLOR["panel"], CARD, border_radius=12)
-        area = pygame.Rect(0, CARD.y + PAD + 10, *PREVIEW)
-        area.centerx = mid
+        theme.panel(self.screen, CARD)
+        pygame.draw.rect(self.screen, COLOR["bg"], INSET, border_radius=theme.RADIUS["panel"] - 4)
         preview = self.previews[self.idx]
-        self.screen.blit(preview, preview.get_rect(center=area.center))
-        self.text(f"Level {self.idx + 1} · {self.level_name(self.idx)}", self.big, "text", (mid, area.bottom + 18), center=True)
-        self.text(plural(self.box_counts[self.idx], "box"), self.font, "muted", (mid, area.bottom + 46), center=True)
+        self.screen.blit(preview, preview.get_rect(center=INSET.center))
+        r = self.text(f"LEVEL {self.idx + 1} OF {len(self.levels)}", "label", "faint",
+                      (mid, INSET.bottom + 20), "midtop")
+        r = self.text(self.level_name(self.idx), "h1", "text", (mid, r.bottom + 6), "midtop")
+        boxes = len(self.level_data[self.idx][2])
+        theme.pill(self.screen, plural(boxes, "box"), "accent", (mid, r.bottom + 10), "midtop")
 
-        # one dot per level, the current one filled
-        n, step_x = len(self.levels), 18
+        n, step_x = len(self.levels), 18  # one dot per level, the current one filled
         for i in range(n):
-            c = (mid - (n - 1) * step_x // 2 + i * step_x, CARD.bottom + 22)
-            pygame.draw.circle(self.screen, COLOR["accent" if i == self.idx else "button"], c, 5)
+            c = (mid - (n - 1) * step_x // 2 + i * step_x, CARD.bottom + 26)
+            on = i == self.idx
+            pygame.draw.circle(self.screen, COLOR["accent" if on else "raised"], c, 5 if on else 4)
 
         self.draw_buttons(self.menu_buttons)
-        for b, d in [(self.prev_btn, -1), (self.next_btn, 1)]:  # arrow triangles on the prev / next buttons
+        for b, d in [(self.prev_btn, -1), (self.next_btn, 1)]:  # arrow triangles on the round buttons
             cx, cy = b.rect.center
-            pts = [(cx + 8 * d, cy), (cx - 6 * d, cy - 12), (cx - 6 * d, cy + 12)]
-            pygame.draw.polygon(self.screen, COLOR["text" if b.is_enabled() else "button"], pts)
+            pts = [(cx + 8 * d, cy), (cx - 5 * d, cy - 11), (cx - 5 * d, cy + 11)]
+            pygame.draw.polygon(self.screen, COLOR["text" if b.is_enabled() else "faint"], pts)
 
     def draw(self):
         self.screen.fill(COLOR["bg"])
         if self.page == "menu":
             self.draw_menu()
-            pygame.display.flip()
-            return
-        if self.mode == "versus":
-            self.draw_versus()
         else:
-            self.draw_board(self.screen, SIDE, 0, self.walls, self.goals, self.ai)
-            self.text(self.msg, self.small, "muted", (SIDE + 10, self.screen.get_height() - BAR["watch"] + 12))
-        self.draw_sidebar()
+            self.draw_game()
         pygame.display.flip()

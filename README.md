@@ -17,4 +17,5 @@ SWI-Prolog engine (all search/reasoning) + Pygame GUI via PySwip. See `sokoban-p
 ## Layout
 - `prolog/` engine: `solver.pl` exposes `solve(LevelFile, Algo, Heur, Prune, Plan, Stats)`
 - `levels/` level files (`#` wall, `.` goal, `$` box, `*` box on goal, `@` agent, `+` agent on goal)
-- `src/sokoban_solver/` GUI (`gui.py`), PySwip bridge (`bridge.py`), level parsing (`level.py`)
+- `src/sokoban_solver/` GUI (`gui.py`), look and feel: colors, fonts, sizes (`theme.py`),
+  PySwip bridge, runs Prolog on a background thread (`bridge.py`), level parsing and move replay (`level.py`)

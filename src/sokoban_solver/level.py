@@ -36,3 +36,36 @@ def step(walls, boxes, agent, move):
             raise ValueError(f"illegal move {move}: box blocked")
         boxes = (boxes - {nxt}) | {beyond}
     return boxes, nxt
+
+
+class Board:
+    """One copy of a level in play: where the boxes and the agent are, plus the score so far."""
+
+    def __init__(self, boxes, agent):
+        self.boxes, self.agent, self.moves, self.pushes = boxes, agent, 0, 0
+
+    def snapshot(self):
+        return self.boxes, self.agent, self.moves, self.pushes
+
+    def restore(self, snap):
+        self.boxes, self.agent, self.moves, self.pushes = snap
+
+    def move(self, walls, m):
+        """Apply one move with step(). Raises ValueError if illegal, and then nothing changes."""
+        boxes, self.agent = step(walls, self.boxes, self.agent, m)
+        self.pushes += boxes != self.boxes  # a push is a move that changed the boxes
+        self.boxes = boxes
+        self.moves += 1
+
+
+def floor(walls, agent):
+    """Cells the agent could ever stand on (flood fill from the start, through anything but walls)."""
+    seen, todo = {agent}, [agent]
+    while todo:
+        x, y = todo.pop()
+        for dx, dy in DIRS.values():
+            n = (x + dx, y + dy)
+            if n not in seen and n not in walls:
+                seen.add(n)
+                todo.append(n)
+    return seen
