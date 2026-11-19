@@ -28,7 +28,8 @@ REPLAY_MS = {"watch": 150, "versus": 120}
 # Game page layout
 SIDE = 320  # sidebar width
 HEADER_H = 46  # "You" / "AI" title line above the boards
-FOOTER_H = {"watch": 56, "versus": 150}  # message / result / deadlock lines under the boards
+FOOTER_H = {"watch": 56, "versus": 120}  # message or result card under the boards
+ALERT = (440, 214)  # deadlock alert box, centered on the window
 WATCH_MIN_W = 420
 ROW = 27
 N_STATS = 7  # rows in the stats box, see stat_rows() / versus_rows()
@@ -153,7 +154,7 @@ class App:
         self.mode, self.algo, self.heur, self.prune = "watch", "astar", "h_match", True
         self.plan, self.stats, self.fail, self.msg, self.status = [], None, None, "", "Ready"
         self.job = self.dead_job = None  # engine calls in flight, see poll_jobs()
-        self.dead, self.hand_cursor = None, False
+        self.dead, self.dead_seen, self.hand_cursor = None, None, False  # dead_seen: deadlock you dismissed
         self.build_sidebar()
         self.build_menu()
         self.open_menu()  # opens the window, which convert_alpha() in load_sprite needs
@@ -209,6 +210,18 @@ class App:
             Button("Quit to levels", (x, y + 2 * (BTN_H + 10), w, BTN_H), self.open_menu, style="ghost"),
         ]
         self.side_h = y + 3 * BTN_H + 2 * 10 + PAD
+
+    def build_alert(self):
+        """Center the deadlock alert in the current window, buttons along its bottom."""
+        self.alert_rect = pygame.Rect((0, 0), ALERT)
+        self.alert_rect.center = self.screen.get_rect().center
+        r, gap = self.alert_rect, 10
+        bw = (r.w - 2 * PAD - 2 * gap) // 3
+        y = r.bottom - PAD - BTN_H
+        self.alert_buttons = [Button(label, (r.x + PAD + i * (bw + gap), y, bw, BTN_H), action, style)
+                              for i, (label, action, style) in enumerate([("Dismiss", self.dismiss_alert, "ghost"),
+                                                                          ("Restart", self.reset, "secondary"),
+                                                                          ("Undo", self.undo, "primary")])]
 
     def build_menu(self):
         """Round prev / next buttons beside the center card, and the two mode buttons under it."""
@@ -269,6 +282,7 @@ class App:
         size = (SIDE + 2 * GAP + content_w, max(GAP + HEADER_H + bh + FOOTER_H[self.mode], self.side_h))
         self.screen = pygame.display.set_mode(size)
         pygame.display.set_caption(f"Sokoban — {self.level.name}")
+        self.build_alert()
         if self.mode == "versus":
             self.new_game()
         else:
@@ -329,6 +343,8 @@ class App:
             self.dead_job = None
             if boxes == self.you.boxes:  # skip answers about a position you've already left
                 self.dead = None if future.exception() else future.result()
+                if not self.dead:
+                    self.dead_seen = None  # out of it: the next deadlock alerts again
 
     def ai_step(self):
         """AI plays its next planned move (its move count is its place in the plan). False if none left."""
@@ -373,7 +389,7 @@ class App:
         self.think("AI thinking...", lambda: setattr(self, "status", self.versus_status()))
 
     def player_move(self, m):
-        if self.job or self.finished or self.you.boxes == self.goals:
+        if self.job or self.finished or self.you.boxes == self.goals or self.alert_open():
             return
         before = (self.you.snapshot(), self.ai.snapshot())
         try:
@@ -397,6 +413,15 @@ class App:
         self.finished = False
         self.check_deadlock()
         self.status = self.versus_status()
+
+    def alert_open(self):
+        """The deadlock alert shows once your pushed crate has stopped, until you Undo, Restart or Dismiss."""
+        return (self.page == "game" and self.mode == "versus" and bool(self.dead)
+                and frozenset(self.dead) != self.dead_seen
+                and self.motion[id(self.you)].progress(pygame.time.get_ticks()) == 1)
+
+    def dismiss_alert(self):
+        self.dead_seen = frozenset(self.dead)
 
     def check_deadlock(self):
         """Ask the engine (in the background) which of your boxes can never reach a goal."""
@@ -430,7 +455,9 @@ class App:
     # --- main loop -----------------------------------------------------------
 
     def current_buttons(self):
-        return self.menu_buttons if self.page == "menu" else self.buttons
+        if self.page == "menu":
+            return self.menu_buttons
+        return self.alert_buttons if self.alert_open() else self.buttons  # the alert is modal
 
     def loop(self):
         clock = pygame.time.Clock()
@@ -625,14 +652,24 @@ class App:
             self.text(self.msg or "Use the arrow keys to move", "body", "danger" if self.msg else "muted", (left, y))
             y += 34
 
-        # Deadlock warning spot (the Prolog query plugs in via bridge.dead_boxes)
-        if self.dead:
-            theme.pill(self.screen, f"Deadlock! {plural(len(self.dead), 'box')} can never reach a goal — click Undo",
-                       "danger", (left, y), "topleft")
-        else:
-            note = "not connected yet" if self.dead is None else "every box can still reach a goal"
-            pygame.draw.circle(self.screen, COLOR["faint" if self.dead is None else "success"], (left + 5, y + 10), 4)
-            self.text(f"Deadlock check: {note}", "small", "faint", (left + 16, y + 2))
+    def draw_alert(self):
+        """Modal deadlock alert: dims the window, the stuck crates keep their red outline underneath."""
+        veil = pygame.Surface(self.screen.get_size(), pygame.SRCALPHA)
+        veil.fill((*COLOR["bg"], 170))
+        self.screen.blit(veil, (0, 0))
+        r = self.alert_rect
+        theme.panel(self.screen, r)
+        pygame.draw.rect(self.screen, COLOR["danger"], (r.x, r.y, r.w, 4),
+                         border_top_left_radius=theme.RADIUS["panel"], border_top_right_radius=theme.RADIUS["panel"])
+        icon = (r.x + PAD + 20, r.y + PAD + 28)
+        pygame.draw.circle(self.screen, theme.mix(COLOR["panel"], COLOR["danger"], 0.22), icon, 20)
+        self.text("!", "h1", "danger", icon, "center")
+        tx = icon[0] + 34
+        self.text("Deadlock", "h1", "text", (tx, r.y + PAD + 12))
+        n = len(self.dead)
+        self.text(f"{plural(n, 'box')} can never reach a goal,", "body", "muted", (tx, r.y + PAD + 52))
+        self.text("so this level can't be solved from here.", "body", "muted", (tx, r.y + PAD + 76))
+        self.draw_buttons(self.alert_buttons)
 
     def draw_game(self):
         bw, bh = self.board_px()
@@ -689,4 +726,6 @@ class App:
             self.draw_menu()
         else:
             self.draw_game()
+            if self.alert_open():
+                self.draw_alert()
         pygame.display.flip()

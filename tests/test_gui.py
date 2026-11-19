@@ -85,3 +85,28 @@ def test_motion_slides_one_step_and_snaps_bigger_jumps():
     board.restore(({(5, 1)}, (2, 1), 0, 0))  # the crate jumped 2 cells (restart / new solve): no slide
     motion.update(board, 2000)
     assert motion.progress(2000) == 1
+
+
+def test_deadlock_alert_blocks_moves_until_undo_or_dismiss(app):
+    app.idx = 1
+    app.start("versus")
+    settle(app)
+    app.player_move("r")
+    app.player_move("u")  # crate pushed into the top row: it can never reach a goal
+    settle(app)
+    app.motion[id(app.you)].start = None  # skip the slide
+    assert app.dead == [(2, 1)] and app.alert_open()
+    assert app.current_buttons() is app.alert_buttons
+    app.draw()
+    app.player_move("d")
+    assert app.you.moves == 2  # the alert is modal: no moves while it's up
+    app.click(app.alert_buttons[2].rect.center)  # Undo
+    settle(app)
+    assert app.you.moves == 1 and not app.alert_open()
+    app.player_move("u")
+    settle(app)
+    app.motion[id(app.you)].start = None
+    app.click(app.alert_buttons[0].rect.center)  # Dismiss: keep looking at the stuck crate
+    assert not app.alert_open() and app.dead == [(2, 1)]
+    app.player_move("d")
+    assert app.you.moves == 3
