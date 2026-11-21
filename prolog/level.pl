@@ -1,5 +1,3 @@
-% Level file -> facts. Format: # wall, . goal, $ box, * box on goal,
-% @ agent, + agent on goal, space floor. X = column, Y = row (0-based).
 :- module(level, [load_level/1, wall/2, goal/2, box/2, agent/2]).
 :- dynamic wall/2, goal/2, box/2, agent/2.
 

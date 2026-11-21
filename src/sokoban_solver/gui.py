@@ -1,17 +1,3 @@
-"""Pygame GUI with two pages. Everything is driven by buttons; the only keys are the arrow keys
-that move you in Player vs AI. All colors, fonts and sizes come from theme.py.
-
-Level selector: one level at a time in the center, starting at level 1, with arrow buttons for the
-previous / next level, then the Watch AI or Player vs AI button.
-
-Game page: sidebar on the left (stats box, settings pickers, control buttons), board(s) on the right.
-Two modes (chosen on the level selector), Quit goes back to the level selector:
-- Watch AI: Solve = solve + play, Reset.
-- Player vs AI: the level twice side by side, you on the left, the AI on the right. Each legal
-  arrow-key move you make, the AI plays its next planned move. Undo, Restart = restart both boards.
-
-The engine runs on a background thread (bridge.submit), so the window stays responsive while it thinks.
-Moves are applied instantly; Motion only animates how the boards are drawn."""
 import math
 import os
 
@@ -22,32 +8,29 @@ from .level import LEVELS_DIR, ROOT, Board, floor, parse
 from .theme import BTN_H, COLOR, GAP, PAD, SEG_H, TILE
 
 ASSETS = ROOT / "assets"
-STEP = pygame.USEREVENT  # replay timer
+STEP = pygame.USEREVENT
 REPLAY_MS = {"watch": 150, "versus": 120}
 
-# Game page layout
-SIDE = 320  # sidebar width
-HEADER_H = 46  # "You" / "AI" title line above the boards
-FOOTER_H = {"watch": 56, "versus": 120}  # message or result card under the boards
-ALERT = (440, 214)  # deadlock alert box, centered on the window
+SIDE = 320
+HEADER_H = 46
+FOOTER_H = {"watch": 56, "versus": 120}
+ALERT = (440, 214)
 WATCH_MIN_W = 420
 ROW = 27
-N_STATS = 7  # rows in the stats box, see stat_rows() / versus_rows()
-STATS_TOP = 96  # title, level name, setup line and divider above the rows
+N_STATS = 7
+STATS_TOP = 96
 STATS_BOX = pygame.Rect(PAD, PAD, SIDE - 2 * PAD, PAD + STATS_TOP + N_STATS * ROW + 6)
 
-# Level selector layout
 MENU_W = 820
-CARD = pygame.Rect((MENU_W - 540) // 2, 140, 540, 446)  # the level shown in the center
-INSET = pygame.Rect(CARD.x + PAD, CARD.y + PAD, CARD.w - 2 * PAD, 300)  # dark area holding the preview
-ARROW = 56  # round prev / next buttons beside the card
+CARD = pygame.Rect((MENU_W - 540) // 2, 140, 540, 446)
+INSET = pygame.Rect(CARD.x + PAD, CARD.y + PAD, CARD.w - 2 * PAD, 300)
+ARROW = 56
 
-# Engine failure reasons (Stats cost) in plain words
 GAVE_UP = {"no_solution": "No solution", "node_limit": "Gave up (too many states)",
            "timeout": "Gave up (time limit)"}
 ALGOS = {"astar": "A*", "greedy": "Greedy", "ucs": "UCS", "bfs": "BFS", "ids": "IDS"}
 HEURS = ["h_sum", "h_match"]
-USES_HEUR = {"astar", "greedy"}  # the engine ignores the heuristic for the other algorithms
+USES_HEUR = {"astar", "greedy"}
 MOVE_KEYS = {pygame.K_UP: "u", pygame.K_DOWN: "d", pygame.K_LEFT: "l", pygame.K_RIGHT: "r"}
 STATUS_COLOR = {"Solved!": "success", "Finished": "success", "Playing": "accent", "Your move": "accent",
                 "Solving...": "warning", "AI thinking...": "warning", "AI finishing...": "warning"}
@@ -55,7 +38,6 @@ WINNER_COLOR = {"You": "success", "AI": "accent", "Tie": "warning"}
 
 
 def load_sprite(name, size):
-    """Load assets/<name> scaled to fit a size x size square."""
     img = pygame.image.load(ASSETS / name).convert_alpha()
     scale = size / max(img.get_size())
     return pygame.transform.smoothscale(img, (round(img.get_width() * scale), round(img.get_height() * scale)))
@@ -66,7 +48,6 @@ def plural(n, word):
 
 
 def segments(n, x, y, w, h, gap):
-    """n equal rects side by side filling width w."""
     bw = (w - gap * (n - 1)) / n
     return [pygame.Rect(round(x + i * (bw + gap)), y, round(bw), h) for i in range(n)]
 
@@ -80,12 +61,8 @@ def lerp(a, b, t):
 
 
 class Motion:
-    """Slides one board's agent, and the crate it pushed, from the old cell to the new one.
-    It watches the board as it is drawn, so the game logic stays instant: a one-cell step (a move,
-    or undoing one) glides; any bigger jump (Restart, Solve) simply appears."""
-
     def __init__(self):
-        self.shown = None  # (agent, boxes) the current slide ends at
+        self.shown = None
         self.agent_from = self.box_from = self.box_to = self.start = None
 
     def update(self, board, now):
@@ -102,13 +79,11 @@ class Motion:
         self.box_from, self.box_to = (next(iter(gone)), next(iter(new))) if gone else (None, None)
 
     def progress(self, now):
-        """How far the slide is, eased: 0 at the old cell, 1 at the new one (and when idle)."""
         if self.start is None or now - self.start >= theme.MOVE_MS:
             return 1.0
         return theme.ease_out((now - self.start) / theme.MOVE_MS)
 
     def landed(self, now):
-        """0..1 through the goal pulse if the pushed crate just landed on a goal cell, else None."""
         if self.start is None or self.box_to is None:
             return None
         t = (now - self.start - theme.MOVE_MS) / theme.PULSE_MS
@@ -116,9 +91,6 @@ class Motion:
 
 
 class Button:
-    """label may be a function (label changes with the mode). selected / enabled are optional functions.
-    style: primary | secondary | ghost | segment (see theme.button)."""
-
     def __init__(self, label, rect, action, style="secondary", selected=None, enabled=None,
                  font="body_bold", radius=theme.RADIUS["button"]):
         self.label, self.rect, self.action, self.style = label, pygame.Rect(rect), action, style
@@ -135,7 +107,7 @@ class Button:
 
 
 def run():
-    os.environ["SDL_VIDEO_CENTERED"] = "1"  # center the window, again after every resize (menu <-> level)
+    os.environ["SDL_VIDEO_CENTERED"] = "1"
     pygame.init()
     levels = sorted(LEVELS_DIR.glob("*.txt"))
     if not levels:
@@ -149,36 +121,32 @@ class App:
     def __init__(self, levels):
         theme.init()
         self.levels, self.idx, self.page = levels, 0, "menu"
-        self.level_data = [parse(level.read_text()) for level in levels]  # (walls, goals, boxes, agent)
+        self.level_data = [parse(level.read_text()) for level in levels]
         self.floors = [floor(walls, agent) for walls, _, _, agent in self.level_data]
         self.mode, self.algo, self.heur, self.prune = "watch", "astar", "h_match", True
         self.plan, self.stats, self.fail, self.msg, self.status = [], None, None, "", "Ready"
-        self.job = self.dead_job = None  # engine calls in flight, see poll_jobs()
-        self.dead, self.dead_seen, self.hand_cursor = None, None, False  # dead_seen: deadlock you dismissed
+        self.job = self.dead_job = None
+        self.dead, self.dead_seen, self.hand_cursor = None, None, False
         self.build_sidebar()
         self.build_menu()
-        self.open_menu()  # opens the window, which convert_alpha() in load_sprite needs
+        self.open_menu()
         self.wall = load_sprite("wall.png", TILE)
         self.crate = load_sprite("crate.png", TILE - 6)
-        self.crate_on_goal = self.crate.copy()  # no asset for this: tint the crate green
+        self.crate_on_goal = self.crate.copy()
         tint = theme.mix(COLOR["box_on_goal"], (255, 255, 255), 0.45)
         self.crate_on_goal.fill(tint, special_flags=pygame.BLEND_RGB_MULT)
         pygame.draw.rect(self.crate_on_goal, COLOR["box_on_goal"], self.crate_on_goal.get_rect(), 3, border_radius=4)
         self.player = load_sprite("player.png", TILE - 6)
-        self.robot = load_sprite("AI-sprite.png", TILE - 6)  # the AI's boards (Watch AI and Player vs AI)
+        self.robot = load_sprite("AI-sprite.png", TILE - 6)
         self.previews = [self.make_preview(i) for i in range(len(levels))]
 
-    # --- layout ----------------------------------------------------------------
-
     def build_sidebar(self):
-        """Lay out the section labels, pickers and buttons under the stats box, top to bottom."""
         x, w = PAD, SIDE - 2 * PAD
         self.labels, self.groups, self.buttons = [], [], []
-        idle = lambda: self.job is None  # settings and controls wait while the engine thinks
+        idle = lambda: self.job is None
         y = STATS_BOX.bottom + GAP - 4
 
         def segmented(options, gx, gw, current, action, enabled=idle):
-            """A row of segments on a dark track. options = [(label, value)]."""
             track = pygame.Rect(gx, y, gw, SEG_H)
             self.groups.append(track)
             for (label, value), r in zip(options, segments(len(options), gx + 3, y + 3, gw - 6, SEG_H - 6, gap=2)):
@@ -192,7 +160,7 @@ class App:
                   lambda: self.algo, lambda v: self.pick(algo=v))
         y += SEG_H + GAP - 8
 
-        hw = (w - 12) * 3 // 5  # heuristic gets more room than pruning, its labels are longer
+        hw = (w - 12) * 3 // 5
         self.labels += [("Heuristic", (x, y)), ("Pruning", (x + hw + 12, y))]
         y += 20
         uses_heur = lambda: self.algo in USES_HEUR
@@ -212,7 +180,6 @@ class App:
         self.side_h = y + 3 * BTN_H + 2 * 10 + PAD
 
     def build_alert(self):
-        """Center the deadlock alert in the current window, buttons along its bottom."""
         self.alert_rect = pygame.Rect((0, 0), ALERT)
         self.alert_rect.center = self.screen.get_rect().center
         r, gap = self.alert_rect, 10
@@ -224,7 +191,6 @@ class App:
                                                                           ("Undo", self.undo, "primary")])]
 
     def build_menu(self):
-        """Round prev / next buttons beside the center card, and the two mode buttons under it."""
         arrow_y = INSET.centery - ARROW // 2
         self.prev_btn = Button("", (CARD.x - 28 - ARROW, arrow_y, ARROW, ARROW), lambda: self.select(-1),
                                enabled=lambda: self.idx > 0, radius=ARROW // 2)
@@ -240,19 +206,16 @@ class App:
         self.menu_size = (MENU_W, by + bh + 44)
 
     def make_preview(self, i):
-        """Level i's start position, scaled down to fit the selector's preview area."""
         walls, _, boxes, agent = self.level_data[i]
         surf = pygame.Surface(((max(x for x, _ in walls) + 1) * TILE, (max(y for _, y in walls) + 1) * TILE))
         surf.fill(COLOR["bg"])
         self.draw_board(surf, 0, 0, i, Board(boxes, agent))
         box = INSET.inflate(-40, -40)
-        scale = min(box.w / surf.get_width(), box.h / surf.get_height(), 1)  # never blow up the pixel art
+        scale = min(box.w / surf.get_width(), box.h / surf.get_height(), 1)
         return pygame.transform.smoothscale(surf, (round(surf.get_width() * scale), round(surf.get_height() * scale)))
 
-    # --- level selector --------------------------------------------------------
-
     def open_menu(self):
-        self.page, self.job = "menu", None  # a search still running is discarded
+        self.page, self.job = "menu", None
         pygame.time.set_timer(STEP, 0)
         self.screen = pygame.display.set_mode(self.menu_size)
         pygame.display.set_caption("Sokoban — choose a level")
@@ -261,11 +224,8 @@ class App:
         self.idx = min(max(self.idx + d, 0), len(self.levels) - 1)
 
     def start(self, mode):
-        """Open the selected level on the game page in the chosen mode."""
         self.page, self.mode = "game", mode
         self.load()
-
-    # --- shared actions --------------------------------------------------------
 
     @property
     def level(self):
@@ -276,7 +236,6 @@ class App:
         return (max(x for x, _ in walls) + 1) * TILE, (max(y for _, y in walls) + 1) * TILE
 
     def load(self):
-        """Size the window for the current level and mode, then start fresh."""
         bw, bh = self.board_px()
         content_w = 2 * bw + GAP if self.mode == "versus" else max(bw, WATCH_MIN_W)
         size = (SIDE + 2 * GAP + content_w, max(GAP + HEADER_H + bh + FOOTER_H[self.mode], self.side_h))
@@ -289,10 +248,9 @@ class App:
             self.reset()
 
     def reset(self):
-        """Put every board back at the level start. In versus mode the AI keeps its plan (Restart)."""
         self.walls, self.goals, boxes, agent = self.level_data[self.idx]
         self.you, self.ai = Board(boxes, agent), Board(boxes, agent)
-        self.motion = {id(self.you): Motion(), id(self.ai): Motion()}  # fresh boards start still
+        self.motion = {id(self.you): Motion(), id(self.ai): Motion()}
         self.history, self.finished, self.msg, self.job = [], False, "", None
         pygame.time.set_timer(STEP, 0)
         if self.mode == "versus":
@@ -302,7 +260,6 @@ class App:
             self.plan, self.stats, self.fail, self.status = [], None, None, "Ready"
 
     def pick(self, **setting):
-        """Change algo / heur / prune. Old stats would be mislabelled, so start over."""
         if all(getattr(self, k) == v for k, v in setting.items()):
             return
         for k, v in setting.items():
@@ -313,23 +270,20 @@ class App:
             self.reset()
 
     def setup_label(self):
-        """The chosen setup, e.g. 'A* · h_match · pruning on', so every screenshot says what ran."""
         parts = [ALGOS[self.algo]] + ([self.heur] if self.algo in USES_HEUR else [])
         return " · ".join(parts + [f"pruning {'on' if self.prune else 'off'}"])
 
     def think(self, busy, then):
-        """Start the engine on the chosen settings in the background; then() runs when it's done."""
         self.plan, self.stats, self.fail, self.status = [], None, None, busy
         self.job = (bridge.submit(bridge.solve, self.level, self.algo, self.heur, self.prune), then)
 
     def poll_jobs(self):
-        """Pick up finished engine calls (once per frame)."""
         if self.job and self.job[0].done():
             future, then = self.job
             self.job = None
             try:
                 plan, self.stats = future.result()
-            except Exception as ex:  # show engine/bridge errors instead of crashing the GUI
+            except Exception as ex:
                 self.fail, self.msg = "Error", f"Engine error: {ex}"
             else:
                 cost = self.stats and self.stats["cost"]
@@ -341,13 +295,12 @@ class App:
         if self.dead_job and self.dead_job[0].done():
             future, boxes = self.dead_job
             self.dead_job = None
-            if boxes == self.you.boxes:  # skip answers about a position you've already left
+            if boxes == self.you.boxes:
                 self.dead = None if future.exception() else future.result()
                 if not self.dead:
-                    self.dead_seen = None  # out of it: the next deadlock alerts again
+                    self.dead_seen = None
 
     def ai_step(self):
-        """AI plays its next planned move (its move count is its place in the plan). False if none left."""
         if self.ai.moves >= len(self.plan):
             return False
         try:
@@ -358,7 +311,6 @@ class App:
         return True
 
     def play_step(self):
-        """Timer tick: watch mode replays the plan; versus mode lets the AI finish after you solved."""
         if self.ai_step():
             return
         pygame.time.set_timer(STEP, 0)
@@ -368,10 +320,8 @@ class App:
         elif self.status == "Playing":
             self.status = self.fail or ("Solved!" if self.ai.boxes <= self.goals else "Done")
 
-    # --- watch mode ------------------------------------------------------------
-
     def solve(self):
-        self.reset()  # the engine solves from the level's start position
+        self.reset()
         self.think("Solving...", self.start_replay)
 
     def start_replay(self):
@@ -381,10 +331,7 @@ class App:
             self.status = "Playing"
             pygame.time.set_timer(STEP, REPLAY_MS["watch"])
 
-    # --- player vs AI ------------------------------------------------------------
-
     def new_game(self):
-        """Solve once with the chosen settings to get the AI's plan, then both start from the level start."""
         self.reset()
         self.think("AI thinking...", lambda: setattr(self, "status", self.versus_status()))
 
@@ -395,12 +342,12 @@ class App:
         try:
             self.you.move(self.walls, m)
         except ValueError:
-            return  # into a wall or a blocked box: nothing counts and the AI doesn't move
+            return
         self.history.append(before)
         self.ai_step()
         self.check_deadlock()
         if self.you.boxes == self.goals:
-            pygame.time.set_timer(STEP, REPLAY_MS["versus"])  # you're done: the AI plays out the rest
+            pygame.time.set_timer(STEP, REPLAY_MS["versus"])
         self.status = self.versus_status()
 
     def undo(self):
@@ -415,7 +362,6 @@ class App:
         self.status = self.versus_status()
 
     def alert_open(self):
-        """The deadlock alert shows once your pushed crate has stopped, until you Undo, Restart or Dismiss."""
         return (self.page == "game" and self.mode == "versus" and bool(self.dead)
                 and frozenset(self.dead) != self.dead_seen
                 and self.motion[id(self.you)].progress(pygame.time.get_ticks()) == 1)
@@ -424,7 +370,6 @@ class App:
         self.dead_seen = frozenset(self.dead)
 
     def check_deadlock(self):
-        """Ask the engine (in the background) which of your boxes can never reach a goal."""
         self.dead_job = (bridge.submit(bridge.dead_boxes, self.level, self.you.boxes), self.you.boxes)
 
     def versus_status(self):
@@ -439,8 +384,6 @@ class App:
         return "Your move"
 
     def winners(self):
-        """(fewest moves, fewest pushes) as 'You' / 'AI' / 'Tie' once the game is over, else None.
-        An AI that couldn't solve the level loses both."""
         if not self.finished:
             return None
         ai_solved = self.ai.boxes == self.goals
@@ -452,12 +395,10 @@ class App:
 
         return win(self.you.moves, self.ai.moves), win(self.you.pushes, self.ai.pushes)
 
-    # --- main loop -----------------------------------------------------------
-
     def current_buttons(self):
         if self.page == "menu":
             return self.menu_buttons
-        return self.alert_buttons if self.alert_open() else self.buttons  # the alert is modal
+        return self.alert_buttons if self.alert_open() else self.buttons
 
     def loop(self):
         clock = pygame.time.Clock()
@@ -465,7 +406,7 @@ class App:
             for e in pygame.event.get():
                 if e.type == pygame.QUIT:
                     return
-                if e.type == pygame.KEYDOWN:  # the only keys: arrows move you in Player vs AI
+                if e.type == pygame.KEYDOWN:
                     if self.page == "game" and self.mode == "versus" and e.key in MOVE_KEYS:
                         self.player_move(MOVE_KEYS[e.key])
                 elif e.type == pygame.MOUSEBUTTONDOWN and e.button == 1:
@@ -484,17 +425,14 @@ class App:
                 return
 
     def update_cursor(self):
-        """Hand cursor over anything clickable."""
         pos = pygame.mouse.get_pos()
         hand = any(b.rect.collidepoint(pos) and b.is_enabled() for b in self.current_buttons())
         if hand != self.hand_cursor:
             self.hand_cursor = hand
             try:
                 pygame.mouse.set_cursor(pygame.SYSTEM_CURSOR_HAND if hand else pygame.SYSTEM_CURSOR_ARROW)
-            except pygame.error:  # no system cursors (e.g. headless)
+            except pygame.error:
                 pass
-
-    # --- drawing: shared -------------------------------------------------------
 
     def text(self, s, font, color, pos, anchor="topleft"):
         return theme.text(self.screen, s, font, color, pos, anchor)
@@ -510,15 +448,13 @@ class App:
                          b.font, b.radius)
 
     def draw_board(self, surf, ox, oy, i, board, dead=(), sprite=None, motion=None):
-        """Draw level i with board's boxes and agent (as sprite, default the player) onto surf at (ox, oy).
-        With a Motion, the last step slides into place instead of jumping."""
         walls, goals, _, _ = self.level_data[i]
         now = pygame.time.get_ticks()
         if motion:
             motion.update(board, now)
         t = motion.progress(now) if motion else 1.0
 
-        def cell_rect(cell):  # cell may be fractional mid-slide
+        def cell_rect(cell):
             return pygame.Rect(round(ox + cell[0] * TILE), round(oy + cell[1] * TILE), TILE, TILE)
 
         for cell in self.floors[i]:
@@ -532,9 +468,9 @@ class App:
         sliding = t < 1
         for cell in board.boxes:
             at = cell
-            if sliding and cell == motion.box_to:  # the crate being pushed
+            if sliding and cell == motion.box_to:
                 at = lerp(motion.box_from, cell, t)
-                cell = motion.box_from  # keeps its old look until it arrives
+                cell = motion.box_from
             img = self.crate_on_goal if cell in goals else self.crate
             r = img.get_rect(center=cell_rect(at).center)
             surf.blit(img, r)
@@ -549,7 +485,6 @@ class App:
         surf.blit(sprite, sprite.get_rect(center=cell_rect(at).center).move(0, -hop))
 
     def draw_stage(self, ox, oy, board, dead=(), thinking=False, sprite=None):
-        """A board with a drop shadow; while the engine thinks, veiled with a spinner."""
         rect = pygame.Rect((ox, oy), self.board_px())
         theme.shadow(self.screen, rect, 6, offset=6, spread=4)
         self.draw_board(self.screen, ox, oy, self.idx, board, dead, sprite, self.motion[id(board)])
@@ -561,17 +496,13 @@ class App:
             self.text("Thinking…", "body", "muted", (rect.centerx, rect.centery + 12), "midtop")
 
     def draw_header(self, ox, who, board, right):
-        """'You' / 'AI' title with the running score; right = x of the board's right edge."""
         r = self.text(who, "h1", "text", (ox, GAP - 4))
         self.text(f"{plural(board.moves, 'move')} · {plural(board.pushes, 'push')}", "body", "muted",
                   (r.right + 12, r.bottom - 3), "bottomleft")
         if who == "AI" and self.plan and board.moves >= len(self.plan) and not self.finished:
             theme.pill(self.screen, "Done, waiting", "muted", (right, GAP - 2))
 
-    # --- drawing: game page ----------------------------------------------------
-
     def stat_rows(self):
-        """Watch mode engine stats in plain words. Cost / g(n) = box pushes; nodes = states checked."""
         s, ai = self.stats or {}, self.ai
         solved = isinstance(s.get("cost"), int)
         dash = "–"
@@ -586,7 +517,6 @@ class App:
         ]
 
     def versus_rows(self):
-        """Player vs AI scores: (label, you, ai) rows, or (label, value) for one value."""
         s, you, ai = self.stats or {}, self.you, self.ai
         on_goal = lambda b: f"{len(b.boxes & self.goals)} / {len(b.boxes)}"
         win = self.winners()
@@ -622,7 +552,7 @@ class App:
             header = versus and i == 0
             font, color, dy = ("label", "faint", 4) if header else ("body_bold", "text", 0)
             self.text(label, "body", "muted", (x, y))
-            if len(values) == 2:  # You / AI columns
+            if len(values) == 2:
                 self.text(values[0], font, color, (rx - 76, y + dy), "topright")
             self.text(values[-1], font, color, (rx, y + dy), "topright")
             y += ROW
@@ -635,7 +565,7 @@ class App:
 
     def draw_footer_versus(self, left, y, width):
         win = self.winners()
-        if win:  # result card: who won on moves and on pushes
+        if win:
             card = pygame.Rect(left, y, width, 66)
             theme.panel(self.screen, card)
             half = width // 2
@@ -653,7 +583,6 @@ class App:
             y += 34
 
     def draw_alert(self):
-        """Modal deadlock alert: dims the window, the stuck crates keep their red outline underneath."""
         veil = pygame.Surface(self.screen.get_size(), pygame.SRCALPHA)
         veil.fill((*COLOR["bg"], 170))
         self.screen.blit(veil, (0, 0))
@@ -691,8 +620,6 @@ class App:
                 self.text(self.msg, "body", "danger", (left, top + bh + 24))
         self.draw_sidebar()
 
-    # --- drawing: level selector -----------------------------------------------
-
     def draw_menu(self):
         mid = MENU_W // 2
         self.text("Sokoban", "title", "text", (mid, 36), "midtop")
@@ -708,14 +635,14 @@ class App:
         boxes = len(self.level_data[self.idx][2])
         theme.pill(self.screen, plural(boxes, "box"), "accent", (mid, r.bottom + 10), "midtop")
 
-        n, step_x = len(self.levels), 18  # one dot per level, the current one filled
+        n, step_x = len(self.levels), 18
         for i in range(n):
             c = (mid - (n - 1) * step_x // 2 + i * step_x, CARD.bottom + 26)
             on = i == self.idx
             pygame.draw.circle(self.screen, COLOR["accent" if on else "raised"], c, 5 if on else 4)
 
         self.draw_buttons(self.menu_buttons)
-        for b, d in [(self.prev_btn, -1), (self.next_btn, 1)]:  # arrow triangles on the round buttons
+        for b, d in [(self.prev_btn, -1), (self.next_btn, 1)]:
             cx, cy = b.rect.center
             pts = [(cx + 8 * d, cy), (cx - 5 * d, cy - 11), (cx - 5 * d, cy + 11)]
             pygame.draw.polygon(self.screen, COLOR["text" if b.is_enabled() else "faint"], pts)

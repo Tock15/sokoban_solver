@@ -1,4 +1,3 @@
-"""Level parsing and move replay for display only (no search logic here)."""
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -7,7 +6,6 @@ DIRS = {"u": (0, -1), "d": (0, 1), "l": (-1, 0), "r": (1, 0)}
 
 
 def parse(text):
-    """Return (walls, goals, boxes, agent) using the same format as prolog/level.pl."""
     walls, goals, boxes, agent = set(), set(), set(), None
     for y, line in enumerate(text.splitlines()):
         for x, c in enumerate(line):
@@ -25,7 +23,6 @@ def parse(text):
 
 
 def step(walls, boxes, agent, move):
-    """Apply one u/d/l/r move. Raises if the engine returned an illegal move."""
     dx, dy = DIRS[move]
     nxt = (agent[0] + dx, agent[1] + dy)
     if nxt in walls:
@@ -39,8 +36,6 @@ def step(walls, boxes, agent, move):
 
 
 class Board:
-    """One copy of a level in play: where the boxes and the agent are, plus the score so far."""
-
     def __init__(self, boxes, agent):
         self.boxes, self.agent, self.moves, self.pushes = boxes, agent, 0, 0
 
@@ -51,15 +46,13 @@ class Board:
         self.boxes, self.agent, self.moves, self.pushes = snap
 
     def move(self, walls, m):
-        """Apply one move with step(). Raises ValueError if illegal, and then nothing changes."""
         boxes, self.agent = step(walls, self.boxes, self.agent, m)
-        self.pushes += boxes != self.boxes  # a push is a move that changed the boxes
+        self.pushes += boxes != self.boxes
         self.boxes = boxes
         self.moves += 1
 
 
 def floor(walls, agent):
-    """Cells the agent could ever stand on (flood fill from the start, through anything but walls)."""
     seen, todo = {agent}, [agent]
     while todo:
         x, y = todo.pop()

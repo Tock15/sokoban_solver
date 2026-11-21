@@ -1,13 +1,7 @@
-"""PySwip bridge to the Prolog engine: solve(LevelFile, Algo, Heur, Prune, Plan, Stats).
-
-The GUI calls everything through submit(), which runs it on one background "prolog" thread: the
-window keeps redrawing during long searches, and queries never run at the same time (level facts
-asserted by one query can't clash with another). Call shutdown() before exiting."""
 import queue
 import threading
 from concurrent.futures import Future
 
-"""PySwip bridge to the Prolog engine: solve/6 and dead_boxes/3 in prolog/solver.pl."""
 from .level import ROOT
 
 _prolog = None
@@ -15,11 +9,9 @@ _jobs = queue.Queue()
 
 
 def _engine():
-    """Start SWI-Prolog and load the engine once. Call it first from the main thread (submit() does):
-    the background thread then gets its own secondary engine, which shutdown() can release cleanly."""
     global _prolog
     if _prolog is None:
-        from pyswip import Prolog  # imported lazily: needs SWI-Prolog installed
+        from pyswip import Prolog
 
         _prolog = Prolog()
         for f in ("solver.pl", "verify.pl"):
@@ -32,20 +24,18 @@ def _worker():
         fn, args, future = _jobs.get()
         try:
             future.set_result(fn(*args))
-        except Exception as ex:  # handed to whoever reads the future
+        except Exception as ex:
             future.set_exception(ex)
 
 
-# daemon: closing the window never waits for a search that is still running
 threading.Thread(target=_worker, name="prolog", daemon=True).start()
 
 
 def submit(fn, *args):
-    """Run fn(*args) on the Prolog thread, in order. Returns a concurrent.futures.Future."""
     future = Future()
     try:
         _engine()
-    except Exception as ex:  # e.g. SWI-Prolog not installed: report it through the future
+    except Exception as ex:
         future.set_exception(ex)
         return future
     _jobs.put((fn, args, future))
@@ -53,7 +43,6 @@ def submit(fn, *args):
 
 
 def shutdown(timeout=1.0):
-    """Release the Prolog thread's engine so SWI-Prolog exits quietly. Skipped if a search is still running."""
     if _prolog is None:
         return
 
@@ -71,8 +60,7 @@ def _path(level_file):
 
 
 def solve(level_file, algo="astar", heur="h_sum", prune=True):
-    """Return (plan, stats) with plan a list of 'u'/'d'/'l'/'r' and stats a dict."""
-    path = level_file.as_posix().replace("\\", "\\\\").replace("'", "\\'")  # escape for a quoted Prolog atom
+    path = level_file.as_posix().replace("\\", "\\\\").replace("'", "\\'")
     q = f"solve('{path}', {algo}, {heur}, {str(prune).lower()}, Plan, stats(N, T, C, F))"
     res = list(_engine().query(q, maxresult=1))
     if not res:
@@ -83,7 +71,6 @@ def solve(level_file, algo="astar", heur="h_sum", prune=True):
 
 
 def verify(level_file, heur, prune):
-    """Heuristic checks via verify/4: dict(h_start, c_star, admissible, violations), or None if UCS/A* gave up."""
     q = f"verify('{_path(level_file)}', {heur}, {str(prune).lower()}, report(H, C, A, V))"
     res = list(_engine().query(q, maxresult=1))
     if not res:
@@ -93,13 +80,11 @@ def verify(level_file, heur, prune):
 
 
 def set_limits(nodes, seconds):
-    """Change the engine's per-search limits (default 1,000,000 nodes, 60 s) for this process."""
     list(_engine().query(f"retractall(solver:limit(_, _)), assertz(solver:limit(nodes, {int(nodes)})), "
                          f"assertz(solver:limit(seconds, {int(seconds)}))"))
 
 
 def dead_boxes(level_file, boxes):
-    """Return the boxes (as (x, y)) that can never reach a goal. Call after each push."""
     q = f"dead_boxes('{_path(level_file)}', {[list(b) for b in boxes]}, D)"
     res = list(_engine().query(q, maxresult=1))
     return [tuple(b) for b in res[0]["D"]] if res else []

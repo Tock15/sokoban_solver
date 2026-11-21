@@ -1,4 +1,3 @@
-% Run: swipl -g run_tests -t halt tests/test_engine.pl
 :- use_module('../prolog/verify').
 :- use_module('../prolog/solver').
 :- use_module('../prolog/level').
@@ -49,7 +48,6 @@ test(consistent_and_admissible, [forall((level(F, _), member(H, [h_sum, h_match]
     assertion(Admissible == true),
     assertion(Violations == 0).
 
-% Soundness: deadlock rules never flag a state on a known solution path.
 test(deadlock_sound_on_solution_path, [forall(level(F, _))]) :-
     run(F, ucs, none, false, found(Pushes, _, _), _),
     initial_state(S0),
@@ -58,14 +56,13 @@ test(deadlock_sound_on_solution_path, [forall(level(F, _))]) :-
 test(corner_and_dead_square_detected) :-
     load_level('levels/01_tiny.txt'),
     compute_dead_squares,
-    assertion(dead(state(_, [1-1]))),     % corner, not a goal
-    assertion(dead(state(_, [2-1]))),     % along top wall, no goal on it
+    assertion(dead(state(_, [1-1]))),
+    assertion(dead(state(_, [2-1]))),
     assertion(\+ dead(state(_, [2-2]))),
-    assertion(dead(state(_, [4-1]))),     % corner next to the goal
+    assertion(dead(state(_, [4-1]))),
     assertion(\+ dead(state(_, [3-2]))).
 
 test(dead_boxes_returns_only_stuck_boxes) :-
-    % 02_two_boxes: goals on row 3; top row is dead, start boxes and goal cells are live
     dead_boxes('levels/02_two_boxes.txt', [[1,1], [2,2], [3,3], [5,1]], Dead),
     assertion(Dead == [[1,1], [5,1]]),
     dead_boxes('levels/02_two_boxes.txt', [[2,2], [4,2]], None),

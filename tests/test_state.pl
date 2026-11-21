@@ -1,4 +1,3 @@
-% Run: swipl -g run_tests -t halt tests/test_state.pl
 :- use_module('../prolog/level').
 :- use_module('../prolog/state').
 :- use_module(library(plunit)).
@@ -25,7 +24,6 @@ test(solve_by_two_pushes_right, [setup(tiny)]) :-
     assertion(goal_state(S2)).
 
 test(canonical_merges_agent_positions, [setup(tiny)]) :-
-    % agent anywhere in the same region gives the same state
     reachable(4-3, [2-2], Cells),
     assertion(Cells = [1-1|_]).
 

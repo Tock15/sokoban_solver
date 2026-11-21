@@ -1,14 +1,9 @@
-"""Experiments (plan section 7): every algorithm x pruning x level, then tables and a chart.
-Run: uv run python -m sokoban_solver.experiments   (slow, about an hour: many runs use the full node budget)
-Writes runs.csv, verify.csv, tables.md, nodes.png into OUT."""
 import csv
 
 from . import bridge
 from .level import LEVELS_DIR, ROOT, parse
 
 OUT = ROOT / "results" / "node_limit_30k"
-# Node budget decides, so results are the same on any machine; time is only a safety net.
-# The GUI keeps the engine defaults (1,000,000 nodes, 60 s).
 NODE_LIMIT, TIME_LIMIT = 30_000, 600
 SETUPS = [("bfs", "none"), ("ids", "none"), ("ucs", "none"), ("greedy", "h_sum"),
           ("greedy", "h_match"), ("astar", "h_sum"), ("astar", "h_match")]
@@ -19,11 +14,10 @@ def setup_name(algo, heur):
 
 
 def b_star(nodes, depth):
-    """Effective branching factor (AIMA 3.6.1): the b with 1 + b + b^2 + ... + b^d = N + 1."""
     if depth < 1 or nodes < 1:
         return None
     total = lambda b: sum(b ** i for i in range(depth + 1))
-    lo, hi = 0.0, float(nodes)  # total(0) = 1 <= N + 1 <= total(N)
+    lo, hi = 0.0, float(nodes)
     for _ in range(100):
         mid = (lo + hi) / 2
         lo, hi = (mid, hi) if total(mid) < nodes + 1 else (lo, mid)
@@ -46,7 +40,6 @@ def run_all(levels):
                              "b_star": b_star(s["nodes"], s["cost"]) if solved else ""})
                 print(level.stem, setup_name(algo, heur), "prune" if prune else "no-prune", rows[-1]["status"],
                       s["nodes"], "nodes", flush=True)
-    # optimal = same cost as UCS on that level with the same pruning setting
     ucs = {(r["level"], r["prune"]): r["cost"] for r in rows if r["algo"] == "ucs"}
     for r in rows:
         best = ucs[(r["level"], r["prune"])]
@@ -61,7 +54,7 @@ def verify_all(levels, rows):
     for level in levels:
         for heur in ("h_sum", "h_match"):
             for prune in (True, False):
-                if (level.stem, prune) not in ucs_solved:  # no C* to compare against
+                if (level.stem, prune) not in ucs_solved:
                     continue
                 v = bridge.verify(level, heur, prune)
                 if v:
@@ -77,7 +70,6 @@ def write_csv(path, rows):
 
 
 def pivot(rows, prune, cell):
-    """Markdown table: one row per level, one column per setup."""
     names = [setup_name(a, h) for a, h in SETUPS]
     lines = ["| Level | Boxes | " + " | ".join(names) + " |", "|---|---|" + "---|" * len(names)]
     for level in dict.fromkeys(r["level"] for r in rows):
@@ -106,7 +98,7 @@ def tables(rows, checks):
 
 
 def chart(rows, path):
-    import matplotlib  # dev dependency, only needed here
+    import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 

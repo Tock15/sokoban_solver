@@ -1,7 +1,3 @@
-% Canonical state state(Region, Boxes), reachability, push/3, goal test.
-% Cells are X-Y. Boxes is an ordset. Region is the smallest reachable cell in
-% standard order (leftmost column, then top row), so all agent positions inside
-% one region map to the same state.
 :- module(state, [initial_state/1, reachable/3, push/3, goal_state/1, delta/3,
                   plan_moves/4, walk/4]).
 :- use_module(level).
@@ -22,8 +18,6 @@ initial_state(state(R, Boxes)) :-
 canonical(Cell, Boxes, R) :-
     reachable(Cell, Boxes, [R|_]).
 
-% reachable(+Start, +Boxes, -Cells): ordset of cells the agent can walk to without pushing.
-% shortcut: assumes the level is enclosed by walls (flood never terminates otherwise); add a bounds check if open levels are used.
 reachable(Start, Boxes, Cells) :-
     flood([Start], Boxes, [Start], Cells).
 
@@ -42,9 +36,6 @@ free(X-Y, Boxes) :-
     \+ wall(X, Y),
     \+ ord_memberchk(X-Y, Boxes).
 
-% push(+State, -push(Box, Dir), -Next): one box push (step cost 1).
-% Legal if the agent can reach the cell behind the box and the target cell is free.
-% Dead-square pruning is applied by the search (Prune flag), not here.
 push(state(R, Boxes), push(BX-BY, Dir), state(R1, Boxes1)) :-
     reachable(R, Boxes, Reach),
     member(BX-BY, Boxes),
@@ -55,13 +46,11 @@ push(state(R, Boxes), push(BX-BY, Dir), state(R1, Boxes1)) :-
     free(TX-TY, Boxes),
     ord_del_element(Boxes, BX-BY, B0),
     ord_add_element(B0, TX-TY, Boxes1),
-    canonical(BX-BY, Boxes1, R1).   % agent now stands where the box was
+    canonical(BX-BY, Boxes1, R1).
 
 goal_state(state(_, Boxes)) :-
     forall(member(X-Y, Boxes), goal(X, Y)).
 
-% plan_moves(+Agent, +Boxes, +Pushes, -Moves): micro level. Turns a push plan into
-% u/d/l/r moves by walking (BFS) to the cell behind each box, then pushing.
 plan_moves(_, _, [], []).
 plan_moves(Agent, Boxes, [push(BX-BY, D)|Ps], Moves) :-
     delta(D, DX, DY),
@@ -73,12 +62,10 @@ plan_moves(Agent, Boxes, [push(BX-BY, D)|Ps], Moves) :-
     plan_moves(BX-BY, B1, Ps, Rest),
     append(Walk, [D|Rest], Moves).
 
-% walk(+From, +To, +Boxes, -Moves): shortest agent path by BFS (FIFO queue), boxes are obstacles.
 walk(From, To, Boxes, Moves) :-
     walk_bfs([From-[]], Boxes, [From], To, Rev),
     reverse(Rev, Moves).
 
-% Red cut: BFS reaches To first by a shortest path; without the cut, backtracking returns longer paths.
 walk_bfs([To-Rev|_], _, _, To, Rev) :- !.
 walk_bfs([X-Y-Rev|Queue], Boxes, Seen, To, Out) :-
     findall(NX-NY-[D|Rev],
@@ -88,5 +75,5 @@ walk_bfs([X-Y-Rev|Queue], Boxes, Seen, To, Out) :-
     findall(C, member(C-_, Ns), Cs0),
     sort(Cs0, Cs),
     ord_union(Seen, Cs, Seen1),
-    append(Queue, Ns, Queue1),   % shortcut: O(n) enqueue, fine for small grids
+    append(Queue, Ns, Queue1),
     walk_bfs(Queue1, Boxes, Seen1, To, Out).

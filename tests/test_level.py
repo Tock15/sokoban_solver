@@ -19,8 +19,8 @@ def test_push_into_wall_is_illegal():
 def test_board_counts_moves_and_pushes():
     walls, goals, boxes, agent = parse("######\n#@ $.#\n######")
     b = Board(boxes, agent)
-    b.move(walls, "r")  # walk
-    b.move(walls, "r")  # push the box onto the goal
+    b.move(walls, "r")
+    b.move(walls, "r")
     assert (b.moves, b.pushes, b.boxes) == (2, 1, goals)
 
 

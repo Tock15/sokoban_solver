@@ -1,11 +1,10 @@
-"""End to end: Python -> PySwip -> solve/6 -> replay the plan. Needs SWI-Prolog installed."""
 import pytest
 
 from sokoban_solver import bridge
 from sokoban_solver.level import LEVELS_DIR, parse, step
 
 
-TOO_HARD = {"10_five_boxes"}  # times out on purpose: shows the solver's limit in the experiments
+TOO_HARD = {"10_five_boxes"}
 
 
 @pytest.mark.parametrize("level", [p for p in sorted(LEVELS_DIR.glob("*.txt")) if p.stem not in TOO_HARD],

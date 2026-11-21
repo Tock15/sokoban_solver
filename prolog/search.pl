@@ -1,12 +1,3 @@
-% Search over pushes (step cost 1).
-% One generic best-first graph search: frontier = library(heaps), closed = library(assoc).
-% The priority picks the algorithm: BFS = FIFO, UCS f=g, Greedy f=h, A* f=g+h.
-% IDS is a separate depth-limited DFS.
-%
-% search(+Algo, +Heur, +Prune, +Start, +limits(MaxNodes, Deadline), -Result)
-%   Result = found(Pushes, Cost, Info) | failed(Reason, Info)
-%   Reason = no_solution | node_limit | timeout
-%   Info   = info(NodesExpanded, MaxFrontier, ConsistencyViolations)
 :- module(search, [search/6]).
 :- use_module(library(heaps)).
 :- use_module(library(assoc)).
@@ -17,7 +8,7 @@
 :- use_module(deadlock).
 
 search(ids, _, Prune, S0, Limits, Result) :-
-    !,   % green cut: the next clause's memberchk rejects ids anyway; this only drops the choicepoint
+    !,
     ids(S0, Prune, Limits, Result).
 search(Algo, Heur, Prune, S0, Limits, Result) :-
     memberchk(Algo, [bfs, ucs, greedy, astar]),
@@ -27,7 +18,6 @@ search(Algo, Heur, Prune, S0, Limits, Result) :-
     empty_assoc(Closed),
     bf(Heap, Closed, ctx(Algo, Heur, Prune, Limits), 1, 0, 1, 0, Result).
 
-% Ties break FIFO on the insertion counter Seq.
 priority(bfs, _, _, Seq, Seq).
 priority(ucs, G, _, Seq, G-Seq).
 priority(greedy, _, H, Seq, H-Seq).
@@ -35,7 +25,6 @@ priority(astar, G, H, Seq, F-Seq) :- F is G + H.
 
 pruned(true, S) :- dead(S).
 
-% bf(+Heap, +Closed, +Ctx, +Seq, +Nodes, +MaxFrontier, +Violations, -Result)
 bf(Heap, Closed, Ctx, Seq, N, MaxF, V, Result) :-
     Ctx = ctx(_, _, _, limits(MaxNodes, Deadline)),
     Info = info(N, MaxF, V),
@@ -44,7 +33,7 @@ bf(Heap, Closed, Ctx, Seq, N, MaxF, V, Result) :-
     ;   get_from_heap(Heap, _, node(S, G, H, Path), Heap1)
     ->  (   get_assoc(S, Closed, _)
         ->  bf(Heap1, Closed, Ctx, Seq, N, MaxF, V, Result)
-        ;   goal_state(S)   % goal test on pop: with a consistent h the first goal popped is optimal
+        ;   goal_state(S)
         ->  reverse(Path, Pushes), Result = found(Pushes, G, Info)
         ;   expand(S, G, H, Path, Heap1, Closed, Ctx, Seq, N, MaxF, V, Result)
         )
@@ -60,7 +49,7 @@ expand(S, G, H, Path, Heap, Closed, Ctx, Seq, N, MaxF, V, Result) :-
             ( push(S, P, S1), \+ get_assoc(S1, Closed1, _), \+ pruned(Prune, S1) ),
             Children),
     (   Algo == bfs, member(S1-P, Children), goal_state(S1)
-    ->  % BFS tests the goal on generation (AIMA 3.4.1), still optimal with unit costs
+    ->
         reverse([P|Path], Pushes), Result = found(Pushes, G1, info(N1, MaxF, V))
     ;   foldl(add_child(Algo, Heur, G1, H, Path), Children, Heap-Seq-V, Heap1-Seq1-V1),
         heap_size(Heap1, Size),
@@ -68,7 +57,6 @@ expand(S, G, H, Path, Heap, Closed, Ctx, Seq, N, MaxF, V, Result) :-
         bf(Heap1, Closed1, Ctx, Seq1, N1, MaxF1, V1, Result)
     ).
 
-% Also checks consistency on every edge: h(n) =< c(n,a,n') + h(n') with c = 1.
 add_child(Algo, Heur, G1, H, Path, S1-P, Heap-Seq-V, Heap1-Seq1-V1) :-
     h(Heur, S1, H1),
     ( H > 1 + H1 -> V1 is V + 1 ; V1 = V ),
@@ -76,8 +64,6 @@ add_child(Algo, Heur, G1, H, Path, S1-P, Heap-Seq-V, Heap1-Seq1-V1) :-
     add_to_heap(Heap, Pri, node(S1, G1, H1, [P|Path]), Heap1),
     Seq1 is Seq + 1.
 
-% IDS: depth-limited DFS (tree search, cycle check on the current path only) with
-% increasing limits. MaxFrontier is reported as the final depth limit (the stack depth).
 ids(S0, Prune, limits(MaxNodes, Deadline), Result) :-
     nb_setval(ids_nodes, 0),
     catch(ids_from(0, S0, Prune, MaxNodes, Deadline, Pushes, L),
@@ -95,8 +81,6 @@ ids_from(L, S0, Prune, MaxNodes, Deadline, Pushes, Depth) :-
         ids_from(L1, S0, Prune, MaxNodes, Deadline, Pushes, Depth)
     ).
 
-% Cut: the caller keeps only the first answer (->), so it only saves work.
-% Without it, backtracking would also return longer plans that pass through this goal.
 dls(S, _, _, _, _, []) :- goal_state(S), !.
 dls(S, L, Path, Prune, Lim, [P|Ps]) :-
     L > 0,

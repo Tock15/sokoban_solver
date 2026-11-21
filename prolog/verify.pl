@@ -1,8 +1,3 @@
-% Empirical checks of the heuristic proofs (plan Section 5).
-%   Consistency : violations of h(n) =< 1 + h(n') counted on every edge A* expands (target 0)
-%   Admissibility: h(start) =< C*, where C* is the optimal cost found by UCS
-% verify(+LevelFile, +Heur, +Prune, -report(HStart, CStar, Admissible, Violations))
-% Load this file (it loads solver.pl) to get both solve/6 and verify/4.
 :- module(verify, [verify/4]).
 :- use_module(solver).
 :- use_module(state).
